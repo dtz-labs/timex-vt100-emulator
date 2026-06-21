@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-21
 **Target hardware:** Timex TC2048 (primary). Z80A @ 3.5 MHz, 48 KB RAM, SCLD video.
-**Toolchain:** Z88DK (`zcc`, Oct 2025 build) at `~/Programowanie/z88dk`; Fuse emulator at `/Applications/Fuse.app` (machine id `2048`).
+**Toolchain:** Z88DK (`zcc`, Oct 2025 build) at `~/Programowanie/z88dk`; **ZEsarUX 13.0** emulator at `/Applications/ZEsarUX.app/Contents/MacOS/zesarux` (machine `TC2048`). ZEsarUX replaces Fuse: it adds a scriptable remote protocol (ZRCP) and headless video, so emulator checks can be **automated**, not just eyeballed.
 **Status:** Approved design — first of several specs for the terminal project. Later specs cover the **Spectranet transport** (telnet/TCP to a host running emacs/vi) and, optionally, a **colour mode**. **Revised 2026-06-21 after an independent technical review** that verified the load-bearing z88dk claims against the installed libraries and corrected the hi-res linkage premise and the default-palette bug (see §2.1, D8, D9). Some hardware/toolchain claims here are carried over *verified* from the sibling twin-stick game project (same toolchain).
 
 ---
@@ -28,14 +28,14 @@ Non-goals for this slice: networking, SSH/crypto, colour, scrollback history, do
 | # | Decision | Rationale |
 |---|----------|-----------|
 | D1 | **Hi-res mono 512×192, 64×24 chars, 8×8 font.** | Width matters for an editor; SCLD hi-res is the only mode giving ≥64 columns. Hi-res is monochrome-only, accepted because emacs needs *width*, not colour. "Reverse video" (emacs mode line, region) = invert the 8 glyph bytes — cheap. Tell the host `stty cols 64 rows 24`. |
-| D2 | **Target TC2048, build `+zx`, Fuse machine `2048`.** | Same target family as the game (proven toolchain). TC2048 has a Spectrum-compatible edge connector, so the *future* Spectranet card plugs in directly (TS2068's connector would need an adapter). |
+| D2 | **Target TC2048, build `+zx`, ZEsarUX machine `TC2048`.** | Same target family as the game (proven toolchain). TC2048 has a Spectrum-compatible edge connector, so the *future* Spectranet card plugs in directly (TS2068's connector would need an adapter). |
 | D3 | **Cell-grid model + dirty-row incremental render** (Approach A). | Parser mutates an in-RAM 64×24 cell grid `{ch, attr}` with per-row dirty flags; renderer blits only changed cells. Scroll-region, insert/delete line/char, selective erase and reverse-video re-render are all trivial on a grid and impossible-to-get-right writing straight to the interleaved 2-bank hi-res display file. ~3 KB RAM cost is negligible. |
 | D4 | **Comms behind a `conn` interface; MVP uses a stub/loopback + baked demo stream.** | The VT parser + renderer + keyboard are the engine risk and are testable without hardware. Networking is a separate concern with its own external/hardware risk → its own spec. |
 | D5 | **Keyboard: CAPS SHIFT → Ctrl, SYMBOL SHIFT → Meta (or ESC-prefix), `5/6/7/8` → cursor CSI.** | The Spectrum has no Ctrl/Meta keys; emacs is built on them. Remap the two shift keys. Pure decode (key event → byte sequence) is host-tested; the matrix read is a thin target-only wrapper, exactly like the game's `input.c`. |
 | D6 | **Reuse the game's hard-won toolchain rules.** | Same `zcc`/SDCC: pass structs via **out-pointers, never return by value** (SDCC z80 `gen.c` crash); **avoid header-name shadowing** of z88dk system headers (`-iquote`, distinct names); **no float/malloc/recursion**; `-clib=sdcc_iy`; ORG defaults to `0x8000`. |
 | D7 | **Poll-driven main loop** (no `HALT` dependency). | The terminal polls `conn` and the keyboard; it does not need the frame interrupt. The crt boots with interrupts disabled (game §2.1) — harmless here. `im 1; ei` is added **only if** we want cursor blink / timed pacing (then a frame counter). |
 | D8 | **Own the hi-res address math — this is the baseline, not a fallback.** | The review verified the z88dk `tshr_*` / `ts_vmod` family is **not reachable under `+zx`** (absent from `zx_clib.lib`, header off the include path; lives only in `ts2068_clib.lib` / `zxn_clib.lib`). So we compute hi-res addresses ourselves. The verified formula: `byte_col = char_col >> 1; file_base = (char_col & 1) ? 0x6000 : 0x4000; addr = file_base + zx_thirds(byte_col, pixel_row)` where `zx_thirds` is the standard ZX scanline byte math (carried verbatim from the game's host-tested `scld_scanline`). The per-column even/odd bank split is **new** vs the game and must be host-tested (module `hires.c`, §4). |
-| D9 | **Base palette white-on-black, set via port `0xFF` bits 3–5; REVERSE defined relative to it.** | Hi-res colour is global (no per-cell attrs), chosen by port `0xFF` bits 3–5. `OUT (0xFF),6` alone leaves bits 3–5 = `000` = **black-on-white** (a white screen) — not what we want. We set the bits-3–5 code for **white-on-black** (exact 3-bit code confirmed at M1 in Fuse; `000` is *not* it). `ATTR_REVERSE` then = draw the complemented glyph (white cell, black ink) against the black field; against a white base it would be invisible, hence the base must be fixed first. |
+| D9 | **Base palette white-on-black, set via port `0xFF` bits 3–5; REVERSE defined relative to it.** | Hi-res colour is global (no per-cell attrs), chosen by port `0xFF` bits 3–5. `OUT (0xFF),6` alone leaves bits 3–5 = `000` = **black-on-white** (a white screen) — not what we want. We set the bits-3–5 code for **white-on-black** (exact 3-bit code confirmed at M1 on ZEsarUX; `000` is *not* it). `ATTR_REVERSE` then = draw the complemented glyph (white cell, black ink) against the black field; against a white base it would be invisible, hence the base must be fixed first. |
 
 ---
 
@@ -53,17 +53,17 @@ Non-goals for this slice: networking, SSH/crypto, colour, scrollback history, do
 - **I/O under `sdcc_iy`:** `outp()` from `<stdlib.h>` is *not* declared — use `z80_outp()` from `<z80.h>`; interrupts/HALT via `<intrinsic.h>` (`intrinsic_im_1` / `intrinsic_ei`). (Game §15.5.)
 
 **To confirm at M1 (no invented APIs — finalise empirically):**
-- The exact **bits-3–5 hi-res colour code for white-on-black** (visual check in Fuse; `000` = black-on-white is *not* it — see D9).
+- The exact **bits-3–5 hi-res colour code for white-on-black** (checked on ZEsarUX via screen dump; `000` = black-on-white is *not* it — see D9).
 - Our own `hires.c` address math produces the right screen bytes (host-tested vs the verified formula; dump screen RAM with `z88dk-ticks` to confirm on target).
 - Hi-res memory **contention** and **full-screen render cost** — measure with `z88dk-ticks` before claiming any refresh rate (see §11); the game measured ~9,000 T per 8×8 C blit, so full-repaint paths are a real cost.
-- Reverse-video and cursor rendering look correct in the Fuse GUI (no headless screenshot — visual check is manual).
+- Reverse-video and cursor rendering look correct on ZEsarUX (ZRCP screenshot / RAM dump — automatable, plus a human glance).
 
 ---
 
 ## 3. Scope of this slice
 
 **In scope**
-- Build system producing a `.tap` that boots into hi-res mode on Fuse-as-2048.
+- Build system producing a `.tap` that boots into hi-res mode on ZEsarUX-as-TC2048.
 - `video`: enter SCLD hi-res (mode 6), clear, bank-layout constants.
 - `screen`: 64×24 cell grid `{ch, attr}`, cursor, scroll region, current SGR, per-row dirty flags; all grid operations (put, erase, scroll, insert/delete, save/restore cursor).
 - `vtparse`: VT-100/ANSI state machine driving `screen` (subset in §6).
@@ -210,17 +210,24 @@ export ZCCCFG="$HOME/Programowanie/z88dk/lib/config"
 
 zcc +zx -SO3 -clib=sdcc_iy -iquote"$PWD/include" src/*.c -o build/term -create-app
 
-/Applications/Fuse.app/Contents/MacOS/Fuse --machine 2048 --tape build/term.tap
+ZX=/Applications/ZEsarUX.app/Contents/MacOS/zesarux
+
+# Interactive run as a Timex TC2048 (the +zx tap reaches the SCLD via OUT 0xFF):
+"$ZX" --machine TC2048 --tape build/term.tap
+
+# Headless / scripted check: no video/audio, ZRCP on :10000 for memory + screen dumps.
+"$ZX" --machine TC2048 --tape build/term.tap --vo null --ao null \
+      --enable-remoteprotocol --remoteprotocol-port 10000 --quickexit
 ```
 
-(Carried from the game: `--machine 2048` not `tc2048`; no `--auto-load`; `-zorg` not needed.)
+Notes: still build `+zx` (TC2048 is Spectrum-compatible; hi-res is a runtime SCLD feature of the machine model). ZEsarUX machine id is **`TC2048`** (not Fuse's bare `2048`). `-zorg` not needed (ORG defaults to 0x8000).
 
 ---
 
 ## 11. Testing strategy
 
 - **Host unit tests (TDD):** `vtparse`, `screen`, `keymap` — pure integer logic compiled with native `cc`. Feed byte sequences, assert the resulting cell grid / cursor / attributes (golden cases drawn from real VT-100 sequences). `test/run.sh` mirrors the game's harness.
-- **Emulator integration (Fuse, visual):** `video` + `render` + the full poll loop driven by a **baked demo VT-100 stream** (ANSI art / a recorded editor screen / a scroll test). This Fuse build has no headless screenshot, so flicker/legibility/cursor are a **manual visual check**; `z88dk-ticks` confirms screen RAM was written at the right hi-res addresses and measures render cost.
+- **Emulator integration (ZEsarUX, scriptable):** `video` + `render` + the full poll loop driven by a **baked demo VT-100 stream** (ANSI art / a recorded editor screen / a scroll test). Unlike Fuse, ZEsarUX can be driven headlessly (`--vo null`) and scripted over **ZRCP** (`--enable-remoteprotocol`), which exposes memory reads and screen capture — so M1/M3 can run **automated** checks: boot the tap, read the hi-res display files (`0x4000`/`0x6000`) over ZRCP and assert our `hires.c` wrote the expected bytes, plus capture a screenshot for a diffable artifact. (Exact ZRCP screen/memory command names confirmed at M1 — no invented APIs.) A human glance still helps for legibility/flicker, but is no longer the only option. `z88dk-ticks` measures render cost.
 - **Host tests must not bake in loopback behaviour:** the MVP `conn` loopback echoes *raw* keystrokes (Enter = bare CR, control chars literal) — that is **not** how a real host behaves (a host echoes and translates). Keep `vtparse`/`keymap` test expectations defined against real VT-100 semantics, not against what the loopback happens to produce.
 
 **Performance reality (do not hand-wave):** the dirty-row model makes the *common* editor case cheap — typing dirties one row, scrolling dirties the region. But two paths are genuinely expensive in C: a **full-screen repaint** (`^L`, clear, switching emacs buffers — 64×24 = 1536 cells) and a **fast-scrolling region**. The game measured **~9,000 T per 8×8 glyph blit in C**; a full repaint at even ~1,000 T/cell is ~1.5M T ≈ 0.4 s. This is acceptable for a *correct* core, but **hand-written asm for the glyph inner loop is the expected lever**, and no refresh-rate claim is made until measured with `z88dk-ticks`. Incremental render reduces the frequency of the slow path, it does not make rendering free.
@@ -230,7 +237,7 @@ zcc +zx -SO3 -clib=sdcc_iy -iquote"$PWD/include" src/*.c -o build/term -create-a
 ## 12. Open items to resolve during planning / M1
 
 1. ~~Does `ts_vmod` / `tshr_*` link under `+zx`?~~ **Resolved (review):** no — own the address math (D8, `hires.c`). Remaining: host-test our formula and confirm screen RAM on target.
-2. Exact **bits-3–5 white-on-black palette code** for hi-res (D9) — confirm visually in Fuse.
+2. Exact **bits-3–5 white-on-black palette code** for hi-res (D9) — confirm in ZEsarUX (screenshot / screen dump).
 3. Own embedded 8×8 font vs copying the Spectrum ROM font (`0x3D00`).
 4. ~~Include DEC line-drawing charset?~~ Yes (should-have); font glyphs must touch cell edges.
 5. Cursor blink: implement now (needs `im1;ei` + frame counter) or static block first.
@@ -242,9 +249,9 @@ zcc +zx -SO3 -clib=sdcc_iy -iquote"$PWD/include" src/*.c -o build/term -create-a
 
 ## 13. Milestones
 
-1. **M1 — hi-res smoke test:** `+zx` build enters hi-res (raw `OUT 0xFF`, white-on-black), draws fixed 8×8 text on the 64×24 grid in Fuse using our own `hires.c` address math (host-tested first). Confirms mode byte, palette code, and the address formula on target.
-2. **M2 — pure core:** `vtparse` + `screen` host-TDD over the §6 subset (red/green/refactor). *(In progress: `screen.c` `init` + `putc` green.)*
-3. **M3 — render + loop:** dirty-row `render` + the poll loop driven by the baked demo stream; visually verified in Fuse.
+1. **M1 — hi-res smoke test:** `+zx` build enters hi-res (raw `OUT 0xFF`, white-on-black), draws fixed 8×8 text on the 64×24 grid on ZEsarUX (`--machine TC2048`) using our own `hires.c` address math (host-tested first). Confirms mode byte, palette code, and the address formula on target — verified by a ZRCP screen/RAM dump.
+2. **M2 — pure core:** `vtparse` + `screen` host-TDD over the §6 subset (red/green/refactor). *(In progress: `screen.c` `init`/`putc`/`cup`/`scroll` green.)*
+3. **M3 — render + loop:** dirty-row `render` + the poll loop driven by the baked demo stream; verified on ZEsarUX (screenshot + ZRCP RAM assertions).
 4. **M4 — keyboard + loopback:** `keymap` (Ctrl/Meta/cursor) + local echo through `conn`, so typing shows on screen.
 
 **Next spec:** Spectranet transport — real `conn` over telnet/TCP to a host running `emacs`/`vi`.
