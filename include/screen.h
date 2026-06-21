@@ -48,4 +48,15 @@ void screen_init(screen_t *s);
  * / wrap behaviour is added in a later step.) */
 void screen_putc(screen_t *s, u8 ch);
 
+/* Move the cursor to (row, col), 0-based, clamped to the screen. (vtparse
+ * converts the 1-based VT-100 CUP/HVP parameters before calling.) */
+void screen_cup(screen_t *s, u8 row, u8 col);
+
+/* Scroll the current scroll region [top..bot] by n lines, blanking the freed
+ * rows (space, attr 0) and marking the whole region dirty. The cursor is not
+ * moved (callers manage it). n > 0 scrolls up (content moves toward the top,
+ * blanks appear at the bottom); n < 0 scrolls down. |n| is clamped to the
+ * region height. Rows outside the region are untouched. */
+void screen_scroll(screen_t *s, s8 n);
+
 #endif /* SCREEN_H */
