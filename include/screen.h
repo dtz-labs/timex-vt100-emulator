@@ -59,4 +59,23 @@ void screen_cup(screen_t *s, u8 row, u8 col);
  * region height. Rows outside the region are untouched. */
 void screen_scroll(screen_t *s, s8 n);
 
+/* Carriage return: cursor to column 0 of the current row. */
+void screen_cr(screen_t *s);
+
+/* Line feed / index (IND): cursor down one row; if already at the bottom of the
+ * scroll region, scroll the region up by one instead. Column is unchanged. */
+void screen_lf(screen_t *s);
+
+/* Reverse index (RI): cursor up one row; if already at the top of the scroll
+ * region, scroll the region down by one instead. Column is unchanged. */
+void screen_ri(screen_t *s);
+
+/* Erase in line (EL). mode 0: cursor..end of line; 1: start of line..cursor
+ * (inclusive); 2: whole line. Erased cells become space/attr 0; row dirtied. */
+void screen_erase_line(screen_t *s, u8 mode);
+
+/* Erase in display (ED). mode 0: cursor..end of screen; 1: start of
+ * screen..cursor (inclusive); 2: whole screen. Erased cells -> space/attr 0. */
+void screen_erase_display(screen_t *s, u8 mode);
+
 #endif /* SCREEN_H */
