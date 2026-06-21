@@ -3,7 +3,7 @@
 **Date:** 2026-06-21
 **Target hardware:** Timex TC2048 (primary). Z80A @ 3.5 MHz, 48 KB RAM, SCLD video.
 **Toolchain:** Z88DK (`zcc`, Oct 2025 build) at `~/Programowanie/z88dk`; Fuse emulator at `/Applications/Fuse.app` (machine id `2048`).
-**Status:** Approved design — first of several specs for the terminal project. Later specs cover the **Spectranet transport** (telnet/TCP to a host running emacs/vi) and, optionally, a **colour mode**. Some hardware/toolchain claims here are carried over *verified* from the sibling twin-stick game project (same toolchain); the hi-res-specific ones are marked **to confirm at M1**.
+**Status:** Approved design — first of several specs for the terminal project. Later specs cover the **Spectranet transport** (telnet/TCP to a host running emacs/vi) and, optionally, a **colour mode**. **Revised 2026-06-21 after an independent technical review** that verified the load-bearing z88dk claims against the installed libraries and corrected the hi-res linkage premise and the default-palette bug (see §2.1, D8, D9). Some hardware/toolchain claims here are carried over *verified* from the sibling twin-stick game project (same toolchain).
 
 ---
 
@@ -34,25 +34,29 @@ Non-goals for this slice: networking, SSH/crypto, colour, scrollback history, do
 | D5 | **Keyboard: CAPS SHIFT → Ctrl, SYMBOL SHIFT → Meta (or ESC-prefix), `5/6/7/8` → cursor CSI.** | The Spectrum has no Ctrl/Meta keys; emacs is built on them. Remap the two shift keys. Pure decode (key event → byte sequence) is host-tested; the matrix read is a thin target-only wrapper, exactly like the game's `input.c`. |
 | D6 | **Reuse the game's hard-won toolchain rules.** | Same `zcc`/SDCC: pass structs via **out-pointers, never return by value** (SDCC z80 `gen.c` crash); **avoid header-name shadowing** of z88dk system headers (`-iquote`, distinct names); **no float/malloc/recursion**; `-clib=sdcc_iy`; ORG defaults to `0x8000`. |
 | D7 | **Poll-driven main loop** (no `HALT` dependency). | The terminal polls `conn` and the keyboard; it does not need the frame interrupt. The crt boots with interrupts disabled (game §2.1) — harmless here. `im 1; ei` is added **only if** we want cursor blink / timed pacing (then a frame counter). |
-| D8 | **Own the hi-res address math if the z88dk `tshr_*` lib doesn't link under `+zx`.** | We already proved in the game that we can compute interleaved screen addresses ourselves from a base. Hi-res addressing is a known formula; not being able to link `arch/ts2068` under `+zx` is a non-blocker. |
+| D8 | **Own the hi-res address math — this is the baseline, not a fallback.** | The review verified the z88dk `tshr_*` / `ts_vmod` family is **not reachable under `+zx`** (absent from `zx_clib.lib`, header off the include path; lives only in `ts2068_clib.lib` / `zxn_clib.lib`). So we compute hi-res addresses ourselves. The verified formula: `byte_col = char_col >> 1; file_base = (char_col & 1) ? 0x6000 : 0x4000; addr = file_base + zx_thirds(byte_col, pixel_row)` where `zx_thirds` is the standard ZX scanline byte math (carried verbatim from the game's host-tested `scld_scanline`). The per-column even/odd bank split is **new** vs the game and must be host-tested (module `hires.c`, §4). |
+| D9 | **Base palette white-on-black, set via port `0xFF` bits 3–5; REVERSE defined relative to it.** | Hi-res colour is global (no per-cell attrs), chosen by port `0xFF` bits 3–5. `OUT (0xFF),6` alone leaves bits 3–5 = `000` = **black-on-white** (a white screen) — not what we want. We set the bits-3–5 code for **white-on-black** (exact 3-bit code confirmed at M1 in Fuse; `000` is *not* it). `ATTR_REVERSE` then = draw the complemented glyph (white cell, black ink) against the black field; against a white base it would be invisible, hence the base must be fixed first. |
 
 ---
 
 ## 2.1 Hardware & toolchain facts
 
-**Verified by reading the local z88dk install (2026-06-21):**
-- z88dk ships real Timex hi-res support: `ts_vmod(VMOD_HIRES)` in `<arch/ts2068/ts2068.h>` (`VMOD_SPEC=0`, `VMOD_HICLR=2`, `VMOD_HIRES=6`); the `tshr_*` addressing family (`tshr_cxy2saddr`, `tshr_pxy2saddr` with `x` as `unsigned int` 0..511, `tshr_px2bitmask`, and `tshr_saddrp{right,left,up,down}` / `tshr_saddrc{...}` walkers); `asm_tshr_cls` / `asm_tshr_scroll_up` / `asm_tshr_cls_pix`; and an FZX proportional-font hi-res backend (`struct fzx_tshr_state`, `_fzx_tshr_draw_{or,reset,xor}`).
-- Hi-res console output drivers exist (`tshr_01_output_char_64`, `_128`, `_fzx`) but are **`zxn`-target** (Spectrum Next) — structural reference only, not drop-in for `+zx`.
-- SP1 hi-res C examples live under `libsrc/sprites/software/sp1/deprecated/ts2068hr/examples/` (deprecated but compilable reference).
+**Verified by the independent review against the local z88dk install (2026-06-21):**
+- ⛔ **The z88dk Timex hi-res API (`ts_vmod`, `tshr_*`) is NOT reachable under `+zx`.** Verified three ways: `asm_ts_vmod` / `asm_tshr_*` are absent from `lib/clibs/zx_clib.lib` (present only in `ts2068_clib.lib` and `zxn_clib.lib`); `#include <arch/ts2068.h>` under `+zx` fails ("file not found" — the `+zx` config never adds `include/arch/ts2068` to the search path); and the newlib prototypes live in a Spectrum-Next header that dies on Next-only tokens. **Consequence:** we own the hi-res address math (D8) — this is the path, not a contingency. The standard `asm_zx_cxy2saddr` (0x4000 file) *is* in `zx_clib.lib` and the even-column path matches it.
+- ✅ **Hi-res mode byte = 6** (port `0xFF` bits 0–2 = `110`); confirmed in `<arch/ts2068/ts2068.h>` (`VMOD_HIRES 6`) and the WoS Timex reference.
+- ✅ **Both display files form one image; columns alternate banks** — even char-column → `0x4000` file, odd → `0x6000` file (high byte OR `$60`). Confirmed in z88dk `asm_tshr_cxy2saddr.asm` and WoS ("columns taken alternately from screen 0 and screen 1"). No page-flip (fine — a terminal doesn't need it).
+- ✅ **Hi-res vertical/thirds math == standard ZX layout** (`asm_tshr_cy2saddr` is literally aliased to `asm_zx_cy2saddr`), so the game's host-tested scanline byte math is reusable per file.
+- FZX hi-res font backend and the `tshr_01_output_char_64` console driver exist but are `ts2068`/`zxn`-target — structural reference only.
 
 **Carried over verified from the game (same toolchain):**
-- crt boots with **interrupts disabled**; `-clib=sdcc_iy` works; ORG defaults to `0x8000`; `-create-app` emits the `.tap`; SDCC **struct-return-by-value crashes** → out-pointers; our header names must not shadow z88dk's (`-iquote` + distinct names).
+- crt boots with **interrupts disabled**; `-clib=sdcc_iy` works; ORG defaults to `0x8000`; `-create-app` emits the `.tap`; SDCC **struct-return-by-value crashes** → out-pointers; header names must not shadow z88dk's (`-iquote` + distinct names); port `0xFF` **bit 6 = hardware DI** (EI can't override) so every OUT keeps bits 6–7 = 0.
+- **I/O under `sdcc_iy`:** `outp()` from `<stdlib.h>` is *not* declared — use `z80_outp()` from `<z80.h>`; interrupts/HALT via `<intrinsic.h>` (`intrinsic_im_1` / `intrinsic_ei`). (Game §15.5.)
 
 **To confirm at M1 (no invented APIs — finalise empirically):**
-- ⛔ Whether `ts_vmod` / `tshr_*` link under `+zx` (vs requiring `+ts2068`). **Fallback (D8):** compute hi-res addresses ourselves.
-- The exact hi-res byte→pixel **bank interleaving** on the TC2048 (which display file feeds which screen columns), confirmed in Fuse and against the [WoS Timex reference](https://worldofspectrum.org/faq/reference/tmxreference.htm).
-- Hi-res memory **contention** vs full-screen render cost — carry the game's caveat: treat T-state figures as uncontended lower bounds; measure with `z88dk-ticks` before claiming any refresh rate.
-- Reverse-video and cursor rendering look correct in the Fuse GUI (no headless screenshot in this Fuse build — visual check is manual).
+- The exact **bits-3–5 hi-res colour code for white-on-black** (visual check in Fuse; `000` = black-on-white is *not* it — see D9).
+- Our own `hires.c` address math produces the right screen bytes (host-tested vs the verified formula; dump screen RAM with `z88dk-ticks` to confirm on target).
+- Hi-res memory **contention** and **full-screen render cost** — measure with `z88dk-ticks` before claiming any refresh rate (see §11); the game measured ~9,000 T per 8×8 C blit, so full-repaint paths are a real cost.
+- Reverse-video and cursor rendering look correct in the Fuse GUI (no headless screenshot — visual check is manual).
 
 ---
 
@@ -81,13 +85,14 @@ Boundary rule: **only `video.c` / `render.c` know hi-res addresses and port `0xF
 src/main.c     poll loop: conn_read -> vtparse -> screen; render dirty; keymap -> conn_write
 src/vtparse.c  VT-100/ANSI escape state machine, drives screen        [pure, host-tested]
 src/screen.c   64x24 cell grid, cursor, scroll region, SGR, dirty rows [pure, host-tested]
-src/render.c   dirty cells -> hi-res display file; 8x8 glyph blit; cursor   [hi-res specific]
-src/video.c    SCLD hi-res mode set, clear, bank constants             [Timex-specific core]
-src/font.c     8x8 ASCII font data (0x20-0x7E)                         [data]
+src/hires.c    (char_col,pixel_row) -> (bank base, byte offset)        [pure, host-tested]
+src/render.c   dirty cells -> hi-res display file via hires.c; 8x8 glyph blit; cursor [hi-res]
+src/video.c    SCLD hi-res mode set (raw OUT 0xFF), palette, clear     [Timex-specific core]
+src/font.c     8x8 ASCII font data (0x20-0x7E) + DEC line-drawing glyphs [data]
 src/keymap.c   keyboard matrix -> bytes (Ctrl/Meta/cursor)  decode=pure, read=target-only
 src/conn.c     conn_read/conn_write interface + stub/loopback + demo stream
 
-include/  vtparse.h  screen.h  render.h  video.h  font.h  keymap.h  conn.h  types.h
+include/  vtparse.h  screen.h  hires.h  render.h  video.h  font.h  keymap.h  conn.h  types.h
 ```
 
 **Interface sketches** (structs via out-pointers per D6):
@@ -136,7 +141,7 @@ void render_cursor(const screen_t *s);
 0x8000-0xFFFF  program code + data + stack (~32 KB)   ORG 0x8000 (default), stack ~0xFF58
 ```
 
-Data budget (in the 32 KB above `0x8000`): cell grid 64×24×2 = **3072 B**, dirty rows 24 B, font 768 B, parser/keymap/conn state + buffers a few hundred bytes, C runtime/stack ~1–2 KB. Comfortable **~10+ KB free**. The lower 16 KB bank is screen territory by design. A 128 KB machine would later buy scrollback (~1.5 KB/screen) but is not required.
+Data budget (in the 32 KB above `0x8000`): cell grid 64×24×2 = **3072 B**, dirty rows 24 B, font ~768 B (+ line-drawing glyphs), parser/keymap/conn state + buffers a few hundred bytes, C runtime/stack ~2 KB. Total data ≈ **6–7 KB → ~25 KB free** (the review confirmed the budget is comfortable, not tight). The lower 16 KB bank is screen territory by design. A 128 KB machine would later buy scrollback (~1.5 KB/screen) but is not required.
 
 ---
 
@@ -157,7 +162,8 @@ Data budget (in the 32 KB above `0x8000`): cell grid 64×24×2 = **3072 B**, dir
 
 ```
 init:
-    video_hires_on()            ; OUT (0xFF), 6  (or ts_vmod(VMOD_HIRES)); attrs/colour global
+    video_hires_on()            ; z80_outp(0xFF, 6 | WHITE_ON_BLACK_BITS) -- bits0-2=110 hi-res,
+                                ; bits3-5 = white-on-black palette (D9), bits6-7 = 0 (keep interrupt)
     screen_init(&scr); vt_init(&vt); conn_open_stub()
     render full clear; render_flush(&scr)
 
@@ -175,9 +181,11 @@ No `HALT` required. If cursor blink is wanted, add `im 1; ei` once at init and a
 
 ## 8. Cell model & rendering
 
+- **Base palette = white-on-black** (D9), set once via port `0xFF` bits 3–5. All glyph/reverse logic is defined relative to this: normal cell = white ink on black; `ATTR_REVERSE` cell = black ink on white (the complemented glyph). Get the base wrong (e.g. `OUT 0xFF,6` alone → black-on-white) and reverse-video becomes invisible.
 - `cell_t = { ch, attr }`; `attr` bits: `REVERSE`, `UNDERLINE`. Current SGR lives on `screen_t.attr` and is copied into each cell on `putc`.
 - **Dirty tracking per row** (24 flags). `vt_feed` marks a row dirty on any change; `render_flush` blits only dirty rows then clears the flags. Scroll marks the whole region dirty.
-- **Glyph blit:** char on the 64×24 grid maps to exactly one byte column → always byte-aligned (the hi-res win). Address from `tshr_cxy2saddr` (or our own math, D8); copy 8 font bytes down 8 scanlines. **Reverse-video** = blit the complemented bytes. **Underline** = OR `0xFF` into the last row.
+- **Glyph blit:** char on the 64×24 grid maps to exactly one byte column → always byte-aligned (the hi-res win). Address from **our own `hires.c`** (D8 — the z88dk helper isn't linkable under `+zx`): `byte_col = col>>1; base = (col&1)?0x6000:0x4000; addr = base + zx_thirds(byte_col, row*8)`; copy 8 font bytes down 8 scanlines (step within a char row = +256, the thirds math handles char-row boundaries). **Reverse-video** = blit the complemented bytes. **Underline** = set the last row to `0xFF`.
+- **DEC line-drawing glyphs** (`ESC(0`) must be drawn to **touch cell edges** — horizontal at the row's vertical centre spanning full width, verticals at a fixed column abutting neighbours — or box borders won't connect. This is a font-data requirement, not code.
 - **Cursor:** invert the cell under the cursor (or draw a block/underline); hidden when DECTCEM off. Blink optional (§D7).
 
 ---
@@ -213,26 +221,29 @@ zcc +zx -SO3 -clib=sdcc_iy -iquote"$PWD/include" src/*.c -o build/term -create-a
 
 - **Host unit tests (TDD):** `vtparse`, `screen`, `keymap` — pure integer logic compiled with native `cc`. Feed byte sequences, assert the resulting cell grid / cursor / attributes (golden cases drawn from real VT-100 sequences). `test/run.sh` mirrors the game's harness.
 - **Emulator integration (Fuse, visual):** `video` + `render` + the full poll loop driven by a **baked demo VT-100 stream** (ANSI art / a recorded editor screen / a scroll test). This Fuse build has no headless screenshot, so flicker/legibility/cursor are a **manual visual check**; `z88dk-ticks` confirms screen RAM was written at the right hi-res addresses and measures render cost.
+- **Host tests must not bake in loopback behaviour:** the MVP `conn` loopback echoes *raw* keystrokes (Enter = bare CR, control chars literal) — that is **not** how a real host behaves (a host echoes and translates). Keep `vtparse`/`keymap` test expectations defined against real VT-100 semantics, not against what the loopback happens to produce.
+
+**Performance reality (do not hand-wave):** the dirty-row model makes the *common* editor case cheap — typing dirties one row, scrolling dirties the region. But two paths are genuinely expensive in C: a **full-screen repaint** (`^L`, clear, switching emacs buffers — 64×24 = 1536 cells) and a **fast-scrolling region**. The game measured **~9,000 T per 8×8 glyph blit in C**; a full repaint at even ~1,000 T/cell is ~1.5M T ≈ 0.4 s. This is acceptable for a *correct* core, but **hand-written asm for the glyph inner loop is the expected lever**, and no refresh-rate claim is made until measured with `z88dk-ticks`. Incremental render reduces the frequency of the slow path, it does not make rendering free.
 
 ---
 
 ## 12. Open items to resolve during planning / M1
 
-1. Does `ts_vmod` / `tshr_*` link under `+zx`? If not, own the address math (D8).
-2. Exact hi-res bank interleaving on TC2048 (confirm in Fuse + WoS ref).
+1. ~~Does `ts_vmod` / `tshr_*` link under `+zx`?~~ **Resolved (review):** no — own the address math (D8, `hires.c`). Remaining: host-test our formula and confirm screen RAM on target.
+2. Exact **bits-3–5 white-on-black palette code** for hi-res (D9) — confirm visually in Fuse.
 3. Own embedded 8×8 font vs copying the Spectrum ROM font (`0x3D00`).
-4. Include DEC special-graphics line-drawing charset now or defer.
+4. ~~Include DEC line-drawing charset?~~ Yes (should-have); font glyphs must touch cell edges.
 5. Cursor blink: implement now (needs `im1;ei` + frame counter) or static block first.
 6. Meta via `ESC`-prefix vs raw 8-bit — `ESC`-prefix chosen; revisit if a key clashes.
 7. Content of the baked demo stream for M3 (what best exercises scroll-region + SGR + CUP).
-8. Render cost / contention at M3 — measure before claiming any refresh target.
+8. Render cost / contention at M3 — measure with `z88dk-ticks` before claiming any refresh target; expect asm for the glyph loop on the full-repaint path.
 
 ---
 
 ## 13. Milestones
 
-1. **M1 — hi-res smoke test:** `+zx` build enters hi-res, draws fixed 8×8 text on the 64×24 grid in Fuse. Confirms mode set, addressing, and whether `tshr_*` links (else D8 fallback).
-2. **M2 — pure core:** `vtparse` + `screen` host-TDD over the §6 subset (red/green/refactor).
+1. **M1 — hi-res smoke test:** `+zx` build enters hi-res (raw `OUT 0xFF`, white-on-black), draws fixed 8×8 text on the 64×24 grid in Fuse using our own `hires.c` address math (host-tested first). Confirms mode byte, palette code, and the address formula on target.
+2. **M2 — pure core:** `vtparse` + `screen` host-TDD over the §6 subset (red/green/refactor). *(In progress: `screen.c` `init` + `putc` green.)*
 3. **M3 — render + loop:** dirty-row `render` + the poll loop driven by the baked demo stream; visually verified in Fuse.
 4. **M4 — keyboard + loopback:** `keymap` (Ctrl/Meta/cursor) + local echo through `conn`, so typing shows on screen.
 
