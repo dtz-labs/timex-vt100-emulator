@@ -1,0 +1,6 @@
+build/
+*.o
+*.tap
+*.bin
+.DS_Store
+*~
