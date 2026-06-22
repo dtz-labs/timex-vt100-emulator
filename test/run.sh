@@ -15,6 +15,9 @@ mkdir -p "$OUT"
 $CC $CFLAGS "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" -o "$OUT/test_screen"
 "$OUT/test_screen"
 
+$CC $CFLAGS "$ROOT/test/test_vtparse.c" "$ROOT/src/vtparse.c" "$ROOT/src/screen.c" -o "$OUT/test_vtparse"
+"$OUT/test_vtparse"
+
 $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
 "$OUT/test_hires"
 
