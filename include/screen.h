@@ -96,4 +96,12 @@ void screen_insert_chars(screen_t *s, u8 n);
  * blanks appear at the line end. Row only. */
 void screen_delete_chars(screen_t *s, u8 n);
 
+/* Apply one SGR (Select Graphic Rendition) code to the current attribute
+ * (screen_t.attr), which putc copies into each cell. Recognised codes:
+ *   0  -> reset all attributes      7  -> reverse on    27 -> reverse off
+ *   4  -> underline on             24 -> underline off
+ * Any other code (bold 1, colours 30-47, ...) is accepted and ignored.
+ * vtparse feeds the parsed `m` parameters here one at a time. */
+void screen_set_attr(screen_t *s, u8 sgr);
+
 #endif /* SCREEN_H */

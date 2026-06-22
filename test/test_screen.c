@@ -292,6 +292,36 @@ static void test_insert_delete_chars(void)
     CHECK(s.cells[4][COLS - 3].ch == BLANK_CH);
 }
 
+static void test_set_attr_sgr(void)
+{
+    screen_t s;
+    screen_init(&s);
+
+    CHECK(s.attr == 0);                          /* fresh screen: no attrs */
+
+    screen_set_attr(&s, 7);                      /* SGR 7: reverse on */
+    CHECK(s.attr == ATTR_REVERSE);
+
+    screen_set_attr(&s, 4);                      /* SGR 4: underline on */
+    CHECK(s.attr == (ATTR_REVERSE | ATTR_UNDERLINE));
+
+    screen_set_attr(&s, 27);                     /* SGR 27: reverse off */
+    CHECK(s.attr == ATTR_UNDERLINE);
+
+    screen_set_attr(&s, 24);                     /* SGR 24: underline off */
+    CHECK(s.attr == 0);
+
+    screen_set_attr(&s, 7);
+    screen_set_attr(&s, 4);
+    screen_set_attr(&s, 0);                      /* SGR 0: reset all */
+    CHECK(s.attr == 0);
+
+    screen_set_attr(&s, 7);
+    screen_set_attr(&s, 1);                      /* bold: accepted & ignored */
+    screen_set_attr(&s, 31);                     /* colour: accepted & ignored */
+    CHECK(s.attr == ATTR_REVERSE);               /* unchanged by ignored codes */
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -306,6 +336,7 @@ int main(void)
     test_erase_display_modes();
     test_insert_delete_lines();
     test_insert_delete_chars();
+    test_set_attr_sgr();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }

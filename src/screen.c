@@ -216,3 +216,15 @@ void screen_delete_chars(screen_t *s, u8 n)
     }
     s->dirty[row] = 1;
 }
+
+void screen_set_attr(screen_t *s, u8 sgr)
+{
+    switch (sgr) {
+    case 0:  s->attr = 0;                      break;  /* reset all */
+    case 7:  s->attr |= ATTR_REVERSE;          break;  /* reverse on */
+    case 27: s->attr &= (u8)~ATTR_REVERSE;     break;  /* reverse off */
+    case 4:  s->attr |= ATTR_UNDERLINE;        break;  /* underline on */
+    case 24: s->attr &= (u8)~ATTR_UNDERLINE;   break;  /* underline off */
+    default: /* bold, colours, etc.: accepted and ignored (monochrome) */    break;
+    }
+}
