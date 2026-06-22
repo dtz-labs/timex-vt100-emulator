@@ -15,4 +15,7 @@ mkdir -p "$OUT"
 $CC $CFLAGS "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" -o "$OUT/test_screen"
 "$OUT/test_screen"
 
+$CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
+"$OUT/test_hires"
+
 echo "ALL HOST TESTS PASSED"
