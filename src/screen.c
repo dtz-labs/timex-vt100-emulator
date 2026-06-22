@@ -23,14 +23,27 @@ void screen_init(screen_t *s)
     s->saved_cy = 0;
     s->saved_attr = 0;
     s->mode = MODE_AUTOWRAP | MODE_CURSOR_VISIBLE;  /* power-on default */
+    s->wrap_pending = 0;
 }
 
 void screen_putc(screen_t *s, u8 ch)
 {
+    if (s->wrap_pending) {            /* deferred wrap from a prior last-column write */
+        screen_cr(s);                /* (clears wrap_pending, cx -> 0) */
+        screen_lf(s);                /* down a row, scrolling at the region bottom */
+    }
     s->cells[s->cy][s->cx].ch = ch;
     s->cells[s->cy][s->cx].attr = s->attr;
     s->dirty[s->cy] = 1;
-    s->cx++;
+    if (s->cx + 1u >= COLS) {
+        /* Last column: park the cursor. With autowrap, defer the wrap until the
+         * next printable (VT-100). Without it, stay put and overwrite in place. */
+        if (s->mode & MODE_AUTOWRAP) {
+            s->wrap_pending = 1;
+        }
+    } else {
+        s->cx++;
+    }
 }
 
 void screen_cup(screen_t *s, u8 row, u8 col)
@@ -43,6 +56,7 @@ void screen_cup(screen_t *s, u8 row, u8 col)
     }
     s->cy = row;
     s->cx = col;
+    s->wrap_pending = 0;             /* any explicit cursor move clears the LCF */
 }
 
 /* Blank one row to space/attr-0. */
@@ -104,6 +118,7 @@ void screen_scroll(screen_t *s, s8 n)
 void screen_cr(screen_t *s)
 {
     s->cx = 0;
+    s->wrap_pending = 0;
 }
 
 void screen_lf(screen_t *s)
@@ -113,6 +128,7 @@ void screen_lf(screen_t *s)
     } else if (s->cy < ROWS - 1) {
         s->cy++;
     }
+    s->wrap_pending = 0;
 }
 
 void screen_ri(screen_t *s)
@@ -122,6 +138,7 @@ void screen_ri(screen_t *s)
     } else if (s->cy > 0) {
         s->cy--;
     }
+    s->wrap_pending = 0;
 }
 
 /* Blank an inclusive column span [c0..c1] of one row to space/attr-0, dirtying

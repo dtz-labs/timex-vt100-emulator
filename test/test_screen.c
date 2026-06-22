@@ -370,6 +370,64 @@ static void test_modes_default_and_toggle(void)
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));        /* still hidden */
 }
 
+static void test_putc_deferred_wrap(void)
+{
+    screen_t s;
+
+    /* Autowrap ON (default): a char in the last column is placed there and the
+     * cursor parks. The wrap is deferred until the *next* printable char --
+     * the classic VT-100 behaviour that lets the last column be filled without
+     * scrolling. */
+    screen_init(&s);
+    screen_cup(&s, 0, COLS - 1);
+    screen_putc(&s, 'X');
+    CHECK(s.cells[0][COLS - 1].ch == 'X');
+    CHECK(s.cx == COLS - 1 && s.cy == 0);          /* parked, not advanced */
+
+    screen_putc(&s, 'Y');                          /* deferred wrap fires now */
+    CHECK(s.cells[1][0].ch == 'Y');
+    CHECK(s.cx == 1 && s.cy == 1);
+
+    /* Autowrap OFF: the last column is overwritten in place, never wraps. */
+    screen_init(&s);
+    screen_set_mode(&s, MODE_AUTOWRAP, 0);
+    screen_cup(&s, 0, COLS - 1);
+    screen_putc(&s, 'X');
+    screen_putc(&s, 'Y');
+    CHECK(s.cells[0][COLS - 1].ch == 'Y');         /* overwrote X */
+    CHECK(s.cells[1][0].ch == BLANK_CH);           /* no wrap */
+    CHECK(s.cx == COLS - 1 && s.cy == 0);
+
+    /* Deferred wrap on the bottom line scrolls the region up by one. */
+    screen_init(&s);
+    stamp_rows(&s);                                /* col 0 = A B C ... */
+    screen_cup(&s, ROWS - 1, COLS - 1);
+    screen_putc(&s, 'X');                          /* park at bottom-right */
+    screen_putc(&s, 'Y');                          /* wrap -> scroll up */
+    CHECK(s.cells[0][0].ch == 'B');                /* row 0 <- old row 1 */
+    CHECK(s.cy == ROWS - 1 && s.cx == 1);          /* still on (new) last row */
+    CHECK(s.cells[ROWS - 1][0].ch == 'Y');
+
+    /* An explicit cursor move (CUP) clears the pending wrap. */
+    screen_init(&s);
+    screen_cup(&s, 0, COLS - 1);
+    screen_putc(&s, 'X');                          /* wrap pending */
+    screen_cup(&s, 5, 5);                          /* move clears the flag */
+    screen_putc(&s, 'Z');
+    CHECK(s.cells[5][5].ch == 'Z');
+    CHECK(s.cx == 6 && s.cy == 5);
+    CHECK(s.cells[1][0].ch == BLANK_CH);           /* the deferred wrap never ran */
+
+    /* CR also clears the pending wrap. */
+    screen_init(&s);
+    screen_cup(&s, 2, COLS - 1);
+    screen_putc(&s, 'X');                          /* wrap pending */
+    screen_cr(&s);                                 /* col 0, flag cleared */
+    screen_putc(&s, 'Z');
+    CHECK(s.cells[2][0].ch == 'Z');                /* same row, col 0 -- no LF */
+    CHECK(s.cx == 1 && s.cy == 2);
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -387,6 +445,7 @@ int main(void)
     test_set_attr_sgr();
     test_save_restore_cursor();
     test_modes_default_and_toggle();
+    test_putc_deferred_wrap();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }

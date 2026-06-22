@@ -52,8 +52,11 @@ typedef struct {
 void screen_init(screen_t *s);
 
 /* Write one printable character at the cursor using the current attribute,
- * mark the cursor's row dirty, and advance the cursor one column. (Last-column
- * / wrap behaviour is added in a later step.) */
+ * mark the cursor's row dirty, and advance the cursor one column. In the last
+ * column the cursor parks: with MODE_AUTOWRAP the wrap is deferred (VT-100
+ * style) and fires on the next printable (CR+LF, scrolling at the region
+ * bottom); without it the cell is overwritten in place. Any explicit cursor
+ * move (cup/cr/lf/ri) clears the pending wrap. */
 void screen_putc(screen_t *s, u8 ch);
 
 /* Move the cursor to (row, col), 0-based, clamped to the screen. (vtparse
