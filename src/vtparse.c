@@ -69,11 +69,98 @@ static void ground_byte(screen_t *s, u8 b)
     }
 }
 
-/* ESC state: dispatch the single-byte escape finals of the §6 subset. (CSI
- * '[' and charset designators are added in later slices.) */
+/* CSI param at idx with the "default 1" rule (omitted or 0 -> 1): cursor moves,
+ * CUP/HVP coordinates, IL/DL/ICH/DCH counts. */
+static u8 param1(const vtparse_t *vt, u8 idx)
+{
+    u8 v = (idx < vt->nparams) ? vt->params[idx] : 0;
+    return (v == 0) ? 1 : v;
+}
+
+/* Move the cursor by (dy, dx), clamped to the grid (never wraps). */
+static void cursor_move(screen_t *s, int dy, int dx)
+{
+    int ny = (int)s->cy + dy;
+    int nx = (int)s->cx + dx;
+    if (ny < 0) { ny = 0; }
+    if (nx < 0) { nx = 0; }
+    if (ny > (int)ROWS - 1) { ny = (int)ROWS - 1; }
+    if (nx > (int)COLS - 1) { nx = (int)COLS - 1; }
+    screen_cup(s, (u8)ny, (u8)nx);
+}
+
+/* Begin a fresh CSI sequence: clear params and the private marker. */
+static void csi_reset(vtparse_t *vt)
+{
+    u8 i;
+    vt->nparams = 0;
+    vt->has_digit = 0;
+    vt->priv = 0;
+    for (i = 0; i < VT_MAX_PARAMS; ++i) {
+        vt->params[i] = 0;
+    }
+}
+
+/* Act on a complete CSI sequence (final byte b). Unhandled finals are ignored;
+ * more are added in later slices (erase, edit, SGR, modes, queries). */
+static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
+{
+    switch (b) {
+    case 'A': cursor_move(s, -(int)param1(vt, 0), 0); break;  /* CUU */
+    case 'B': cursor_move(s,  (int)param1(vt, 0), 0); break;  /* CUD */
+    case 'C': cursor_move(s, 0,  (int)param1(vt, 0)); break;  /* CUF */
+    case 'D': cursor_move(s, 0, -(int)param1(vt, 0)); break;  /* CUB */
+    case 'H':                                                 /* CUP */
+    case 'f':                                                 /* HVP */
+        screen_cup(s, (u8)(param1(vt, 0) - 1u), (u8)(param1(vt, 1) - 1u));
+        break;
+    default:
+        break;
+    }
+}
+
+/* CSI state: collect numeric params (';'-separated), the '?' private marker,
+ * and ignore intermediates, until a final byte dispatches the sequence. */
+static void csi_byte(vtparse_t *vt, screen_t *s, u8 b)
+{
+    if (b >= '0' && b <= '9') {
+        u16 v;
+        if (vt->nparams == 0) {
+            vt->nparams = 1;
+        }
+        v = (u16)((u16)vt->params[vt->nparams - 1] * 10u + (u16)(b - '0'));
+        vt->params[vt->nparams - 1] = (v > 255u) ? 255u : (u8)v;
+        vt->has_digit = 1;
+        return;
+    }
+    if (b == ';') {
+        if (vt->nparams == 0) {
+            vt->nparams = 1;              /* empty first param -> default */
+        }
+        if (vt->nparams < VT_MAX_PARAMS) {
+            vt->nparams++;
+            vt->params[vt->nparams - 1] = 0;
+        }
+        vt->has_digit = 0;
+        return;
+    }
+    if (b == '?') {
+        vt->priv = 1;                     /* DEC private mode marker */
+        return;
+    }
+    if (b >= 0x20 && b <= 0x2F) {
+        return;                           /* intermediate bytes: ignored */
+    }
+    csi_dispatch(vt, s, b);               /* final byte (0x40-0x7E) */
+    vt->state = VT_S_GROUND;
+}
+
+/* ESC state: dispatch the single-byte escape finals of the §6 subset, or enter
+ * the CSI state. (Charset designators are added in a later slice.) */
 static void esc_byte(vtparse_t *vt, screen_t *s, u8 b)
 {
     switch (b) {
+    case '[':  vt->state = VT_S_CSI; csi_reset(vt); return;  /* CSI entry */
     case 'D':  screen_lf(s); break;                 /* IND  */
     case 'M':  screen_ri(s); break;                 /* RI   */
     case 'E':  screen_cr(s); screen_lf(s); break;   /* NEL  */
@@ -94,6 +181,9 @@ void vt_feed(vtparse_t *vt, screen_t *s, u8 b)
     switch (vt->state) {
     case VT_S_ESC:
         esc_byte(vt, s, b);
+        break;
+    case VT_S_CSI:
+        csi_byte(vt, s, b);
         break;
     case VT_S_GROUND:
     default:

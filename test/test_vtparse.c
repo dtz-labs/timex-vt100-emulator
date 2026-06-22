@@ -122,11 +122,63 @@ static void test_esc_simple(void)
     CHECK(s.mode == (MODE_AUTOWRAP | MODE_CURSOR_VISIBLE));
 }
 
+static void test_csi_cursor_moves(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+    screen_init(&s);
+
+    /* CUP (ESC[r;cH): 1-based params -> 0-based grid */
+    feed(&vt, &s, "\x1b" "[5;10H");
+    CHECK(s.cy == 4 && s.cx == 9);
+
+    /* CUP with no params homes the cursor */
+    feed(&vt, &s, "\x1b" "[H");
+    CHECK(s.cy == 0 && s.cx == 0);
+
+    /* HVP (ESC[r;cf) behaves like CUP */
+    feed(&vt, &s, "\x1b" "[3;3f");
+    CHECK(s.cy == 2 && s.cx == 2);
+
+    /* CUU / CUD / CUF / CUB with explicit counts */
+    screen_cup(&s, 10, 10);
+    feed(&vt, &s, "\x1b" "[3A");
+    CHECK(s.cy == 7 && s.cx == 10);
+    feed(&vt, &s, "\x1b" "[2B");
+    CHECK(s.cy == 9 && s.cx == 10);
+    feed(&vt, &s, "\x1b" "[4C");
+    CHECK(s.cy == 9 && s.cx == 14);
+    feed(&vt, &s, "\x1b" "[5D");
+    CHECK(s.cy == 9 && s.cx == 9);
+
+    /* default count is 1 (ESC[A) */
+    feed(&vt, &s, "\x1b" "[A");
+    CHECK(s.cy == 8 && s.cx == 9);
+
+    /* moves clamp at the edges, never wrap */
+    screen_cup(&s, 0, 0);
+    feed(&vt, &s, "\x1b" "[9A");       /* up past top -> row 0 */
+    CHECK(s.cy == 0);
+    feed(&vt, &s, "\x1b" "[9D");       /* left past col 0 -> col 0 */
+    CHECK(s.cx == 0);
+    screen_cup(&s, ROWS - 1, COLS - 1);
+    feed(&vt, &s, "\x1b" "[99B");      /* down past bottom -> last row */
+    CHECK(s.cy == ROWS - 1);
+    feed(&vt, &s, "\x1b" "[99C");      /* right past end -> last col */
+    CHECK(s.cx == COLS - 1);
+
+    /* a leading empty param defaults to 1 (ESC[;10H -> row 1, col 10) */
+    feed(&vt, &s, "\x1b" "[;10H");
+    CHECK(s.cy == 0 && s.cx == 9);
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
     test_c0_controls();
     test_esc_simple();
+    test_csi_cursor_moves();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }
