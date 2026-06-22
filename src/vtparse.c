@@ -69,9 +69,32 @@ static void ground_byte(screen_t *s, u8 b)
     }
 }
 
+/* ESC state: dispatch the single-byte escape finals of the §6 subset. (CSI
+ * '[' and charset designators are added in later slices.) */
+static void esc_byte(vtparse_t *vt, screen_t *s, u8 b)
+{
+    switch (b) {
+    case 'D':  screen_lf(s); break;                 /* IND  */
+    case 'M':  screen_ri(s); break;                 /* RI   */
+    case 'E':  screen_cr(s); screen_lf(s); break;   /* NEL  */
+    case '7':  screen_save_cursor(s); break;        /* DECSC */
+    case '8':  screen_restore_cursor(s); break;     /* DECRC */
+    case 'c':  screen_init(s); break;               /* RIS  */
+    default:   break;                               /* unsupported: ignore */
+    }
+    vt->state = VT_S_GROUND;
+}
+
 void vt_feed(vtparse_t *vt, screen_t *s, u8 b)
 {
+    if (b == 0x1B) {                  /* ESC anywhere (re)starts a sequence */
+        vt->state = VT_S_ESC;
+        return;
+    }
     switch (vt->state) {
+    case VT_S_ESC:
+        esc_byte(vt, s, b);
+        break;
     case VT_S_GROUND:
     default:
         ground_byte(s, b);
