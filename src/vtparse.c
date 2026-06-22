@@ -126,6 +126,16 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
     case 'M': screen_delete_lines(s, param1(vt, 0));  break;  /* DL  */
     case '@': screen_insert_chars(s, param1(vt, 0));  break;  /* ICH */
     case 'P': screen_delete_chars(s, param1(vt, 0));  break;  /* DCH */
+    case 'm':                                                 /* SGR */
+        if (vt->nparams == 0) {
+            screen_set_attr(s, 0);          /* ESC[m == ESC[0m */
+        } else {
+            u8 i;
+            for (i = 0; i < vt->nparams; ++i) {
+                screen_set_attr(s, vt->params[i]);
+            }
+        }
+        break;
     default:
         break;
     }

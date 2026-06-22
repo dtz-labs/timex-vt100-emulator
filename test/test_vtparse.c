@@ -233,6 +233,38 @@ static void test_csi_erase_and_edit(void)
     CHECK(s.cells[0][0].ch == 'C');
 }
 
+static void test_csi_sgr(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+    screen_init(&s);
+
+    feed(&vt, &s, "\x1b" "[7m");           /* reverse on */
+    CHECK(s.attr == ATTR_REVERSE);
+
+    feed(&vt, &s, "\x1b" "[4m");           /* + underline */
+    CHECK(s.attr == (ATTR_REVERSE | ATTR_UNDERLINE));
+
+    feed(&vt, &s, "\x1b" "[m");            /* ESC[m == ESC[0m, reset */
+    CHECK(s.attr == 0);
+
+    feed(&vt, &s, "\x1b" "[0;7;4m");       /* multi-param: reset+rev+underline */
+    CHECK(s.attr == (ATTR_REVERSE | ATTR_UNDERLINE));
+
+    feed(&vt, &s, "\x1b" "[27;24m");       /* clear reverse + underline */
+    CHECK(s.attr == 0);
+
+    feed(&vt, &s, "\x1b" "[7;1;31;42m");   /* bold/colour accepted & ignored */
+    CHECK(s.attr == ATTR_REVERSE);
+
+    /* the current SGR is stamped into subsequently written cells */
+    feed(&vt, &s, "\x1b" "[0;7m");
+    screen_cup(&s, 5, 5);
+    feed(&vt, &s, "Q");
+    CHECK(s.cells[5][5].attr == ATTR_REVERSE);
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
@@ -240,6 +272,7 @@ int main(void)
     test_esc_simple();
     test_csi_cursor_moves();
     test_csi_erase_and_edit();
+    test_csi_sgr();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }
