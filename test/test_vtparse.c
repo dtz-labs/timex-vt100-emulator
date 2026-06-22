@@ -265,6 +265,47 @@ static void test_csi_sgr(void)
     CHECK(s.cells[5][5].attr == ATTR_REVERSE);
 }
 
+static void test_csi_scroll_region_and_modes(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+    screen_init(&s);
+
+    /* DECSTBM (ESC[5;20r): set region [4..19] 0-based and home the cursor */
+    screen_cup(&s, 10, 10);
+    feed(&vt, &s, "\x1b" "[5;20r");
+    CHECK(s.top == 4 && s.bot == 19);
+    CHECK(s.cy == 0 && s.cx == 0);
+
+    /* DECSTBM reset (ESC[r): full screen */
+    feed(&vt, &s, "\x1b" "[r");
+    CHECK(s.top == 0 && s.bot == ROWS - 1);
+
+    /* DECAWM off / on (ESC[?7l / ESC[?7h) */
+    feed(&vt, &s, "\x1b" "[?7l");
+    CHECK(!(s.mode & MODE_AUTOWRAP));
+    feed(&vt, &s, "\x1b" "[?7h");
+    CHECK(s.mode & MODE_AUTOWRAP);
+
+    /* DECTCEM cursor hide / show (ESC[?25l / ESC[?25h) */
+    feed(&vt, &s, "\x1b" "[?25l");
+    CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
+    feed(&vt, &s, "\x1b" "[?25h");
+    CHECK(s.mode & MODE_CURSOR_VISIBLE);
+
+    /* multiple private modes in one sequence (ESC[?7;25l turns both off) */
+    feed(&vt, &s, "\x1b" "[?7;25l");
+    CHECK(!(s.mode & MODE_AUTOWRAP));
+    CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
+
+    /* a non-private ANSI mode (ESC[4h IRM) is ignored, modes unchanged */
+    feed(&vt, &s, "\x1b" "[?7;25h");
+    feed(&vt, &s, "\x1b" "[4h");
+    CHECK(s.mode & MODE_AUTOWRAP);
+    CHECK(s.mode & MODE_CURSOR_VISIBLE);
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
@@ -273,6 +314,7 @@ int main(void)
     test_csi_cursor_moves();
     test_csi_erase_and_edit();
     test_csi_sgr();
+    test_csi_scroll_region_and_modes();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }

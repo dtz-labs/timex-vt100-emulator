@@ -136,6 +136,29 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
             }
         }
         break;
+    case 'r': {                                               /* DECSTBM */
+        u8 top = param1(vt, 0);             /* default 1 */
+        u8 botp = param0(vt, 1);
+        u8 bot = (botp == 0) ? (u8)ROWS : botp;   /* default = last line */
+        screen_set_scroll_region(s, (u8)(top - 1u), (u8)(bot - 1u));
+        break;
+    }
+    case 'h':                                                 /* SM  */
+    case 'l': {                                               /* RM  */
+        u8 on = (b == 'h');
+        if (vt->priv) {                     /* only the DEC private modes (?Pn) */
+            u8 i;
+            for (i = 0; i < vt->nparams; ++i) {
+                switch (vt->params[i]) {
+                case 7:  screen_set_mode(s, MODE_AUTOWRAP, on);       break;  /* DECAWM */
+                case 25: screen_set_mode(s, MODE_CURSOR_VISIBLE, on); break;  /* DECTCEM */
+                default: break;             /* ?1 DECCKM realised in keymap; rest ignored */
+                }
+            }
+        }
+        /* non-private ANSI modes: none in the §6 subset -> ignored */
+        break;
+    }
     default:
         break;
     }
