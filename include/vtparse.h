@@ -24,7 +24,7 @@ typedef struct {
     u8 params[VT_MAX_PARAMS];      /* collected CSI numeric parameters        */
     u8 nparams;                    /* number of params seen (>=1 once parsing)*/
     u8 has_digit;                  /* a digit seen for the current param      */
-    u8 priv;                       /* CSI private marker '?' seen             */
+    u8 priv;                       /* CSI private prefix byte 0x3C-0x3F, or 0 */
     u8 out[VT_OUT_MAX];            /* pending reply bytes for the host        */
     u8 nout;                       /* number of pending reply bytes           */
 } vtparse_t;

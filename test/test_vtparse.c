@@ -306,6 +306,45 @@ static void test_csi_scroll_region_and_modes(void)
     CHECK(s.mode & MODE_CURSOR_VISIBLE);
 }
 
+/* Assert the parser's reply buffer holds exactly the given ASCII string. */
+static void check_reply(const vtparse_t *vt, const char *want)
+{
+    u8 i = 0;
+    while (want[i]) {
+        CHECK(vt->out[i] == (u8)(unsigned char)want[i]);
+        ++i;
+    }
+    CHECK(vt->nout == i);
+}
+
+static void test_csi_device_queries(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+    screen_init(&s);
+
+    /* DSR (ESC[6n) -> cursor position report ESC[{row};{col}R, 1-based */
+    screen_cup(&s, 4, 9);
+    feed(&vt, &s, "\x1b" "[6n");
+    check_reply(&vt, "\x1b" "[5;10R");
+
+    /* DA (ESC[c) -> VT-100 identity ESC[?1;0c */
+    vt.nout = 0;
+    feed(&vt, &s, "\x1b" "[c");
+    check_reply(&vt, "\x1b" "[?1;0c");
+
+    /* DSR with another param (ESC[5n) adds no reply in this subset */
+    vt.nout = 0;
+    feed(&vt, &s, "\x1b" "[5n");
+    CHECK(vt.nout == 0);
+
+    /* secondary DA (ESC[>c) is not answered with the primary identity */
+    vt.nout = 0;
+    feed(&vt, &s, "\x1b" "[>c");
+    CHECK(vt.nout == 0);
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
@@ -315,6 +354,7 @@ int main(void)
     test_csi_erase_and_edit();
     test_csi_sgr();
     test_csi_scroll_region_and_modes();
+    test_csi_device_queries();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }

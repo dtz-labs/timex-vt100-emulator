@@ -83,6 +83,32 @@ static u8 param0(const vtparse_t *vt, u8 idx)
     return (idx < vt->nparams) ? vt->params[idx] : 0;
 }
 
+/* Append a reply byte for the host, dropping it if the buffer is full. */
+static void emit(vtparse_t *vt, u8 b)
+{
+    if (vt->nout < VT_OUT_MAX) {
+        vt->out[vt->nout++] = b;
+    }
+}
+
+/* Append a 0..255 value as decimal ASCII. */
+static void emit_num(vtparse_t *vt, u8 n)
+{
+    u8 d[3];
+    u8 i = 0;
+    if (n == 0) {
+        emit(vt, '0');
+        return;
+    }
+    while (n > 0) {
+        d[i++] = (u8)('0' + (n % 10u));
+        n = (u8)(n / 10u);
+    }
+    while (i > 0) {
+        emit(vt, d[--i]);
+    }
+}
+
 /* Move the cursor by (dy, dx), clamped to the grid (never wraps). */
 static void cursor_move(screen_t *s, int dy, int dx)
 {
@@ -126,6 +152,27 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
     case 'M': screen_delete_lines(s, param1(vt, 0));  break;  /* DL  */
     case '@': screen_insert_chars(s, param1(vt, 0));  break;  /* ICH */
     case 'P': screen_delete_chars(s, param1(vt, 0));  break;  /* DCH */
+    case 'n':                                                 /* DSR */
+        if (param0(vt, 0) == 6) {           /* cursor position report */
+            emit(vt, 0x1B);
+            emit(vt, '[');
+            emit_num(vt, (u8)(s->cy + 1u));
+            emit(vt, ';');
+            emit_num(vt, (u8)(s->cx + 1u));
+            emit(vt, 'R');
+        }
+        break;
+    case 'c':                                                 /* DA */
+        if (vt->priv != '>') {              /* primary DA -> VT-100 identity */
+            emit(vt, 0x1B);
+            emit(vt, '[');
+            emit(vt, '?');
+            emit(vt, '1');
+            emit(vt, ';');
+            emit(vt, '0');
+            emit(vt, 'c');
+        }
+        break;
     case 'm':                                                 /* SGR */
         if (vt->nparams == 0) {
             screen_set_attr(s, 0);          /* ESC[m == ESC[0m */
@@ -146,7 +193,7 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
     case 'h':                                                 /* SM  */
     case 'l': {                                               /* RM  */
         u8 on = (b == 'h');
-        if (vt->priv) {                     /* only the DEC private modes (?Pn) */
+        if (vt->priv == '?') {              /* only the DEC private modes (?Pn) */
             u8 i;
             for (i = 0; i < vt->nparams; ++i) {
                 switch (vt->params[i]) {
@@ -189,8 +236,8 @@ static void csi_byte(vtparse_t *vt, screen_t *s, u8 b)
         vt->has_digit = 0;
         return;
     }
-    if (b == '?') {
-        vt->priv = 1;                     /* DEC private mode marker */
+    if (b >= 0x3C && b <= 0x3F) {
+        vt->priv = b;                     /* private prefix: < = > ? (store byte) */
         return;
     }
     if (b >= 0x20 && b <= 0x2F) {
