@@ -345,6 +345,46 @@ static void test_csi_device_queries(void)
     CHECK(vt.nout == 0);
 }
 
+static void test_charset_line_drawing(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+
+    /* Default G0 = ASCII: 'q' is stored as-is */
+    screen_init(&s);
+    feed(&vt, &s, "q");
+    CHECK(s.cells[0][0].ch == 'q');
+
+    /* ESC(0 designates G0 = DEC special graphics: 0x5F-0x7E -> high-bit page */
+    screen_init(&s);
+    feed(&vt, &s, "\x1b" "(0");
+    feed(&vt, &s, "q");
+    CHECK(s.cells[0][0].ch == (u8)(0x71 | 0x80));
+
+    /* bytes below 0x5F are unaffected in graphics mode */
+    screen_cup(&s, 0, 1);
+    feed(&vt, &s, "A");
+    CHECK(s.cells[0][1].ch == 'A');
+
+    /* ESC(B restores ASCII */
+    feed(&vt, &s, "\x1b" "(B");
+    screen_cup(&s, 0, 2);
+    feed(&vt, &s, "q");
+    CHECK(s.cells[0][2].ch == 'q');
+
+    /* G1 designation + SO/SI select the active charset */
+    screen_init(&s);
+    feed(&vt, &s, "\x1b" ")0");          /* G1 = special graphics */
+    vt_feed(&vt, &s, 0x0E);               /* SO -> G1 active */
+    feed(&vt, &s, "x");
+    CHECK(s.cells[0][0].ch == (u8)(0x78 | 0x80));
+    vt_feed(&vt, &s, 0x0F);               /* SI -> G0 active (ASCII) */
+    screen_cup(&s, 0, 1);
+    feed(&vt, &s, "x");
+    CHECK(s.cells[0][1].ch == 'x');
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
@@ -355,6 +395,7 @@ int main(void)
     test_csi_sgr();
     test_csi_scroll_region_and_modes();
     test_csi_device_queries();
+    test_charset_line_drawing();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }

@@ -25,6 +25,8 @@ typedef struct {
     u8 nparams;                    /* number of params seen (>=1 once parsing)*/
     u8 has_digit;                  /* a digit seen for the current param      */
     u8 priv;                       /* CSI private prefix byte 0x3C-0x3F, or 0 */
+    u8 g0, g1;                      /* designated charsets: 'B' ASCII / '0' graph */
+    u8 gl;                          /* active charset in GL: 0 = G0, 1 = G1    */
     u8 out[VT_OUT_MAX];            /* pending reply bytes for the host        */
     u8 nout;                       /* number of pending reply bytes           */
 } vtparse_t;

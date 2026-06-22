@@ -12,7 +12,9 @@
 enum {
     VT_S_GROUND = 0,
     VT_S_ESC,          /* ESC seen, awaiting the next byte                 */
-    VT_S_CSI           /* ESC [ seen, collecting params / awaiting final   */
+    VT_S_CSI,          /* ESC [ seen, collecting params / awaiting final   */
+    VT_S_CHARSET_G0,   /* ESC ( seen, awaiting the G0 charset selector     */
+    VT_S_CHARSET_G1    /* ESC ) seen, awaiting the G1 charset selector     */
 };
 
 void vt_init(vtparse_t *vt)
@@ -22,6 +24,9 @@ void vt_init(vtparse_t *vt)
     vt->nparams = 0;
     vt->has_digit = 0;
     vt->priv = 0;
+    vt->g0 = 'B';                  /* both charsets default to ASCII */
+    vt->g1 = 'B';
+    vt->gl = 0;                    /* GL = G0 */
     vt->nout = 0;
     for (i = 0; i < VT_MAX_PARAMS; ++i) {
         vt->params[i] = 0;
@@ -39,12 +44,26 @@ static void do_tab(screen_t *s)
     screen_cup(s, s->cy, stop);
 }
 
+/* Translate a printable byte through the active charset. In DEC special
+ * graphics ('0'), bytes 0x5F-0x7E become the line-drawing glyphs, mapped to a
+ * high-bit font page (ch | 0x80) so the cell model stays {ch, attr}; render.c
+ * / font.c (Task C) hold the box-drawing glyphs at 0x80-0xFE. ASCII passes
+ * through unchanged. */
+static u8 charset_translate(const vtparse_t *vt, u8 b)
+{
+    u8 active = vt->gl ? vt->g1 : vt->g0;
+    if (active == '0' && b >= 0x5F && b <= 0x7E) {
+        return (u8)(b | 0x80);
+    }
+    return b;
+}
+
 /* GROUND: a printable goes to the grid; recognised C0 controls act; the rest
  * are ignored. ESC is handled by the caller (state transition). */
-static void ground_byte(screen_t *s, u8 b)
+static void ground_byte(vtparse_t *vt, screen_t *s, u8 b)
 {
     if (b >= 0x20 && b != 0x7F) {     /* printable (incl. 0xA0-0xFF for now) */
-        screen_putc(s, b);
+        screen_putc(s, charset_translate(vt, b));
         return;
     }
     switch (b) {
@@ -63,6 +82,12 @@ static void ground_byte(screen_t *s, u8 b)
         break;
     case 0x0D:                        /* CR */
         screen_cr(s);
+        break;
+    case 0x0E:                        /* SO: select G1 into GL */
+        vt->gl = 1;
+        break;
+    case 0x0F:                        /* SI: select G0 into GL */
+        vt->gl = 0;
         break;
     default:                          /* BEL (0x07), DEL, other C0: ignore */
         break;
@@ -247,12 +272,22 @@ static void csi_byte(vtparse_t *vt, screen_t *s, u8 b)
     vt->state = VT_S_GROUND;
 }
 
-/* ESC state: dispatch the single-byte escape finals of the §6 subset, or enter
- * the CSI state. (Charset designators are added in a later slice.) */
+/* Charset designator: 'B' (ASCII) or '0' (DEC special graphics); anything else
+ * is treated as ASCII. gx points at g0 or g1. */
+static void charset_byte(vtparse_t *vt, u8 *gx, u8 b)
+{
+    *gx = (b == '0') ? (u8)'0' : (u8)'B';
+    vt->state = VT_S_GROUND;
+}
+
+/* ESC state: dispatch the single-byte escape finals of the §6 subset, enter the
+ * CSI state, or begin a G0/G1 charset designation. */
 static void esc_byte(vtparse_t *vt, screen_t *s, u8 b)
 {
     switch (b) {
     case '[':  vt->state = VT_S_CSI; csi_reset(vt); return;  /* CSI entry */
+    case '(':  vt->state = VT_S_CHARSET_G0; return;          /* designate G0 */
+    case ')':  vt->state = VT_S_CHARSET_G1; return;          /* designate G1 */
     case 'D':  screen_lf(s); break;                 /* IND  */
     case 'M':  screen_ri(s); break;                 /* RI   */
     case 'E':  screen_cr(s); screen_lf(s); break;   /* NEL  */
@@ -277,9 +312,15 @@ void vt_feed(vtparse_t *vt, screen_t *s, u8 b)
     case VT_S_CSI:
         csi_byte(vt, s, b);
         break;
+    case VT_S_CHARSET_G0:
+        charset_byte(vt, &vt->g0, b);
+        break;
+    case VT_S_CHARSET_G1:
+        charset_byte(vt, &vt->g1, b);
+        break;
     case VT_S_GROUND:
     default:
-        ground_byte(s, b);
+        ground_byte(vt, s, b);
         break;
     }
 }
