@@ -51,14 +51,15 @@ static void blank_row(screen_t *s, int r)
     }
 }
 
-void screen_scroll(screen_t *s, s8 n)
+/* Scroll an arbitrary inclusive row region [top..bot] by n (>0 up, <0 down),
+ * blanking freed rows and dirtying the region. Shared by screen_scroll (the
+ * whole scroll region) and IL/DL (a region starting at the cursor row). */
+static void scroll_region(screen_t *s, int top, int bot, int n)
 {
-    int top = s->top;
-    int bot = s->bot;
     int height = bot - top + 1;
     int absn, r, c;
 
-    if (n == 0) {
+    if (n == 0 || height <= 0) {
         return;
     }
     absn = (n > 0) ? n : -n;
@@ -89,6 +90,11 @@ void screen_scroll(screen_t *s, s8 n)
     for (r = top; r <= bot; ++r) {
         s->dirty[r] = 1;
     }
+}
+
+void screen_scroll(screen_t *s, s8 n)
+{
+    scroll_region(s, s->top, s->bot, n);
 }
 
 void screen_cr(screen_t *s)
@@ -155,4 +161,58 @@ void screen_erase_display(screen_t *s, u8 mode)
             blank_cells(s, r, 0, COLS - 1);
         }
     }
+}
+
+void screen_insert_lines(screen_t *s, u8 n)
+{
+    if (s->cy < s->top || s->cy > s->bot) {
+        return;
+    }
+    scroll_region(s, s->cy, s->bot, -(int)n);    /* down: blanks at cursor row */
+}
+
+void screen_delete_lines(screen_t *s, u8 n)
+{
+    if (s->cy < s->top || s->cy > s->bot) {
+        return;
+    }
+    scroll_region(s, s->cy, s->bot, (int)n);     /* up: blanks at region bottom */
+}
+
+void screen_insert_chars(screen_t *s, u8 n)
+{
+    int row = s->cy;
+    int cx = s->cx;
+    int cnt = n;
+    int c;
+    if (cnt > (int)COLS - cx) {
+        cnt = (int)COLS - cx;
+    }
+    for (c = (int)COLS - 1; c >= cx + cnt; --c) {
+        s->cells[row][c] = s->cells[row][c - cnt];
+    }
+    for (c = cx; c < cx + cnt; ++c) {
+        s->cells[row][c].ch = BLANK_CH;
+        s->cells[row][c].attr = 0;
+    }
+    s->dirty[row] = 1;
+}
+
+void screen_delete_chars(screen_t *s, u8 n)
+{
+    int row = s->cy;
+    int cx = s->cx;
+    int cnt = n;
+    int c;
+    if (cnt > (int)COLS - cx) {
+        cnt = (int)COLS - cx;
+    }
+    for (c = cx; c <= (int)COLS - 1 - cnt; ++c) {
+        s->cells[row][c] = s->cells[row][c + cnt];
+    }
+    for (c = (int)COLS - cnt; c < (int)COLS; ++c) {
+        s->cells[row][c].ch = BLANK_CH;
+        s->cells[row][c].attr = 0;
+    }
+    s->dirty[row] = 1;
 }

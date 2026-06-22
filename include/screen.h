@@ -78,4 +78,22 @@ void screen_erase_line(screen_t *s, u8 mode);
  * screen..cursor (inclusive); 2: whole screen. Erased cells -> space/attr 0. */
 void screen_erase_display(screen_t *s, u8 mode);
 
+/* Insert n blank lines at the cursor row (IL): lines [cy..bot] scroll down by n,
+ * blanks appear at the cursor row, lines pushed past bot are lost. No-op if the
+ * cursor is outside the scroll region. Cursor position unchanged. */
+void screen_insert_lines(screen_t *s, u8 n);
+
+/* Delete n lines at the cursor row (DL): lines below scroll up into [cy..bot],
+ * blanks appear at the bottom of the region. No-op if cursor outside region.
+ * Cursor position unchanged. */
+void screen_delete_lines(screen_t *s, u8 n);
+
+/* Insert n blank chars at the cursor (ICH): cells [cx..end] shift right by n,
+ * blanks at the cursor, cells pushed past the line end are lost. Row only. */
+void screen_insert_chars(screen_t *s, u8 n);
+
+/* Delete n chars at the cursor (DCH): cells to the right shift left by n,
+ * blanks appear at the line end. Row only. */
+void screen_delete_chars(screen_t *s, u8 n);
+
 #endif /* SCREEN_H */

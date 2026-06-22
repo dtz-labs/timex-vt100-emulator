@@ -237,6 +237,61 @@ static void test_erase_display_modes(void)
     CHECK(s.cells[ROWS - 1][COLS - 1].ch == BLANK_CH);
 }
 
+static void test_insert_delete_lines(void)
+{
+    screen_t s;
+
+    screen_init(&s);
+    stamp_rows(&s);                            /* col 0 = A B C ... X */
+    s.cy = 2;
+    s.cx = 5;
+    screen_insert_lines(&s, 1);                /* blank at row 2, rows shift down */
+    CHECK(s.cells[1][0].ch == 'B');            /* above untouched */
+    CHECK(s.cells[2][0].ch == BLANK_CH);       /* inserted blank line */
+    CHECK(s.cells[3][0].ch == 'C');            /* old row 2 pushed to row 3 */
+    CHECK(s.cx == 5 && s.cy == 2);             /* cursor unchanged */
+    CHECK(s.dirty[2]);
+
+    screen_init(&s);
+    stamp_rows(&s);
+    s.cy = 2;
+    s.cx = 5;
+    screen_delete_lines(&s, 1);                /* remove row 2, rows shift up */
+    CHECK(s.cells[1][0].ch == 'B');
+    CHECK(s.cells[2][0].ch == 'D');            /* old row 3 pulled up to row 2 */
+    CHECK(s.cells[ROWS - 1][0].ch == BLANK_CH);/* freed bottom blanked */
+    CHECK(s.cx == 5 && s.cy == 2);
+}
+
+static void test_insert_delete_chars(void)
+{
+    screen_t s;
+    u8 c;
+
+    screen_init(&s);
+    for (c = 0; c < COLS; ++c) {
+        s.cells[4][c].ch = (u8)('a' + (c % 26));
+    }
+    s.cy = 4;
+    s.cx = 2;
+    screen_insert_chars(&s, 3);                /* cols 2.. shift right by 3 */
+    CHECK(s.cells[4][1].ch == (u8)('a' + 1));  /* before cursor unchanged ('b') */
+    CHECK(s.cells[4][2].ch == BLANK_CH);
+    CHECK(s.cells[4][4].ch == BLANK_CH);
+    CHECK(s.cells[4][5].ch == (u8)('a' + 2));  /* old col 2 ('c') now at col 5 */
+    CHECK(s.dirty[4]);
+
+    for (c = 0; c < COLS; ++c) {
+        s.cells[4][c].ch = (u8)('a' + (c % 26));
+    }
+    s.cx = 2;
+    screen_delete_chars(&s, 3);                /* cols to the right shift left by 3 */
+    CHECK(s.cells[4][1].ch == (u8)('a' + 1));  /* before cursor unchanged */
+    CHECK(s.cells[4][2].ch == (u8)('a' + 5));  /* old col 5 ('f') now at col 2 */
+    CHECK(s.cells[4][COLS - 1].ch == BLANK_CH);
+    CHECK(s.cells[4][COLS - 3].ch == BLANK_CH);
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -249,6 +304,8 @@ int main(void)
     test_ri_moves_up_then_scrolls_at_top();
     test_erase_line_modes();
     test_erase_display_modes();
+    test_insert_delete_lines();
+    test_insert_delete_chars();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }
