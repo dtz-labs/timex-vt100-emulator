@@ -19,6 +19,9 @@ void screen_init(screen_t *s)
     s->top = 0;
     s->bot = ROWS - 1;
     s->attr = 0;
+    s->saved_cx = 0;
+    s->saved_cy = 0;
+    s->saved_attr = 0;
 }
 
 void screen_putc(screen_t *s, u8 ch)
@@ -227,4 +230,18 @@ void screen_set_attr(screen_t *s, u8 sgr)
     case 24: s->attr &= (u8)~ATTR_UNDERLINE;   break;  /* underline off */
     default: /* bold, colours, etc.: accepted and ignored (monochrome) */    break;
     }
+}
+
+void screen_save_cursor(screen_t *s)
+{
+    s->saved_cx = s->cx;
+    s->saved_cy = s->cy;
+    s->saved_attr = s->attr;
+}
+
+void screen_restore_cursor(screen_t *s)
+{
+    s->cx = s->saved_cx;
+    s->cy = s->saved_cy;
+    s->attr = s->saved_attr;
 }

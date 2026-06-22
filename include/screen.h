@@ -36,6 +36,7 @@ typedef struct {
     u8 top, bot;      /* scroll region: rows [top..bot] inclusive    */
     u8 attr;          /* current SGR attribute, copied into cells on putc */
     u8 dirty[ROWS];   /* per-row dirty flag: non-zero => needs repaint    */
+    u8 saved_cx, saved_cy, saved_attr;  /* DECSC/DECRC saved cursor + SGR */
 } screen_t;
 
 /* Reset to a blank screen: every cell a space with no attributes, cursor home,
@@ -103,5 +104,15 @@ void screen_delete_chars(screen_t *s, u8 n);
  * Any other code (bold 1, colours 30-47, ...) is accepted and ignored.
  * vtparse feeds the parsed `m` parameters here one at a time. */
 void screen_set_attr(screen_t *s, u8 sgr);
+
+/* Save cursor position and current SGR attribute (DECSC, ESC 7). A later
+ * screen_restore_cursor brings them back. screen_init seeds the saved slot
+ * with home (0,0) and attr 0, so a restore before any save homes the cursor
+ * (VT-100 power-on default). */
+void screen_save_cursor(screen_t *s);
+
+/* Restore the cursor position and SGR attribute saved by screen_save_cursor
+ * (DECRC, ESC 8). */
+void screen_restore_cursor(screen_t *s);
 
 #endif /* SCREEN_H */

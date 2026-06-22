@@ -322,6 +322,33 @@ static void test_set_attr_sgr(void)
     CHECK(s.attr == ATTR_REVERSE);               /* unchanged by ignored codes */
 }
 
+static void test_save_restore_cursor(void)
+{
+    screen_t s;
+    screen_init(&s);
+
+    /* DECRC before any DECSC homes the cursor and clears attrs (init seeds
+     * the saved slot with the VT-100 power-on default). */
+    screen_cup(&s, 7, 9);
+    s.attr = ATTR_REVERSE;
+    screen_restore_cursor(&s);
+    CHECK(s.cy == 0 && s.cx == 0);
+    CHECK(s.attr == 0);
+
+    /* DECSC then move then DECRC restores both position and attribute. */
+    screen_cup(&s, 5, 10);
+    screen_set_attr(&s, 7);                       /* reverse on */
+    screen_save_cursor(&s);
+
+    screen_cup(&s, 1, 1);
+    screen_set_attr(&s, 0);                       /* reset */
+    CHECK(s.cx == 1 && s.cy == 1 && s.attr == 0);
+
+    screen_restore_cursor(&s);
+    CHECK(s.cy == 5 && s.cx == 10);
+    CHECK(s.attr == ATTR_REVERSE);
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -337,6 +364,7 @@ int main(void)
     test_insert_delete_lines();
     test_insert_delete_chars();
     test_set_attr_sgr();
+    test_save_restore_cursor();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }
