@@ -77,6 +77,12 @@ static u8 param1(const vtparse_t *vt, u8 idx)
     return (v == 0) ? 1 : v;
 }
 
+/* CSI param at idx with the "default 0" rule (omitted -> 0): ED/EL modes, SGR. */
+static u8 param0(const vtparse_t *vt, u8 idx)
+{
+    return (idx < vt->nparams) ? vt->params[idx] : 0;
+}
+
 /* Move the cursor by (dy, dx), clamped to the grid (never wraps). */
 static void cursor_move(screen_t *s, int dy, int dx)
 {
@@ -114,6 +120,12 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
     case 'f':                                                 /* HVP */
         screen_cup(s, (u8)(param1(vt, 0) - 1u), (u8)(param1(vt, 1) - 1u));
         break;
+    case 'J': screen_erase_display(s, param0(vt, 0)); break;  /* ED  */
+    case 'K': screen_erase_line(s, param0(vt, 0));    break;  /* EL  */
+    case 'L': screen_insert_lines(s, param1(vt, 0));  break;  /* IL  */
+    case 'M': screen_delete_lines(s, param1(vt, 0));  break;  /* DL  */
+    case '@': screen_insert_chars(s, param1(vt, 0));  break;  /* ICH */
+    case 'P': screen_delete_chars(s, param1(vt, 0));  break;  /* DCH */
     default:
         break;
     }

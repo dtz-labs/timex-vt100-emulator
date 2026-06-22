@@ -173,12 +173,73 @@ static void test_csi_cursor_moves(void)
     CHECK(s.cy == 0 && s.cx == 9);
 }
 
+static void test_csi_erase_and_edit(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+
+    /* ED 2 (ESC[2J): clear the whole screen */
+    screen_init(&s);
+    feed(&vt, &s, "Hello");
+    feed(&vt, &s, "\x1b" "[2J");
+    CHECK(s.cells[0][0].ch == BLANK_CH);
+
+    /* EL default = 0 (ESC[K): cursor..end of line */
+    screen_init(&s);
+    feed(&vt, &s, "ABCDEF");
+    screen_cup(&s, 0, 3);
+    feed(&vt, &s, "\x1b" "[K");
+    CHECK(s.cells[0][2].ch == 'C');
+    CHECK(s.cells[0][3].ch == BLANK_CH);
+
+    /* EL 1 (ESC[1K): start..cursor inclusive */
+    screen_init(&s);
+    feed(&vt, &s, "ABCDEF");
+    screen_cup(&s, 0, 3);
+    feed(&vt, &s, "\x1b" "[1K");
+    CHECK(s.cells[0][3].ch == BLANK_CH);
+    CHECK(s.cells[0][4].ch == 'E');
+
+    /* IL (ESC[L): insert a blank line at the cursor row, push rows down */
+    screen_init(&s);
+    feed(&vt, &s, "row0");
+    screen_cup(&s, 0, 0);
+    feed(&vt, &s, "\x1b" "[L");
+    CHECK(s.cells[0][0].ch == BLANK_CH);
+    CHECK(s.cells[1][0].ch == 'r');
+
+    /* DL (ESC[M): delete the cursor row, pull rows up */
+    screen_init(&s);
+    screen_cup(&s, 1, 0);
+    feed(&vt, &s, "second");
+    screen_cup(&s, 0, 0);
+    feed(&vt, &s, "\x1b" "[M");
+    CHECK(s.cells[0][0].ch == 's');
+
+    /* ICH (ESC[3@): insert 3 blanks at the cursor, shift right */
+    screen_init(&s);
+    feed(&vt, &s, "XYZ");
+    screen_cup(&s, 0, 0);
+    feed(&vt, &s, "\x1b" "[3@");
+    CHECK(s.cells[0][0].ch == BLANK_CH);
+    CHECK(s.cells[0][3].ch == 'X');
+
+    /* DCH (ESC[2P): delete 2 chars at the cursor, shift left */
+    screen_init(&s);
+    feed(&vt, &s, "ABCDE");
+    screen_cup(&s, 0, 0);
+    feed(&vt, &s, "\x1b" "[2P");
+    CHECK(s.cells[0][0].ch == 'C');
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
     test_c0_controls();
     test_esc_simple();
     test_csi_cursor_moves();
+    test_csi_erase_and_edit();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }
