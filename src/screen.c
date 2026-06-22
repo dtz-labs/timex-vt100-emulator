@@ -22,6 +22,7 @@ void screen_init(screen_t *s)
     s->saved_cx = 0;
     s->saved_cy = 0;
     s->saved_attr = 0;
+    s->mode = MODE_AUTOWRAP | MODE_CURSOR_VISIBLE;  /* power-on default */
 }
 
 void screen_putc(screen_t *s, u8 ch)
@@ -244,4 +245,13 @@ void screen_restore_cursor(screen_t *s)
     s->cx = s->saved_cx;
     s->cy = s->saved_cy;
     s->attr = s->saved_attr;
+}
+
+void screen_set_mode(screen_t *s, u8 bits, u8 on)
+{
+    if (on) {
+        s->mode |= bits;
+    } else {
+        s->mode &= (u8)~bits;
+    }
 }

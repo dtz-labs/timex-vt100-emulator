@@ -349,6 +349,27 @@ static void test_save_restore_cursor(void)
     CHECK(s.attr == ATTR_REVERSE);
 }
 
+static void test_modes_default_and_toggle(void)
+{
+    screen_t s;
+    screen_init(&s);
+
+    /* Sensible power-on default: autowrap on, cursor visible. */
+    CHECK(s.mode & MODE_AUTOWRAP);
+    CHECK(s.mode & MODE_CURSOR_VISIBLE);
+
+    screen_set_mode(&s, MODE_CURSOR_VISIBLE, 0);   /* DECTCEM reset: hide */
+    CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
+    CHECK(s.mode & MODE_AUTOWRAP);                 /* other mode untouched */
+
+    screen_set_mode(&s, MODE_AUTOWRAP, 0);         /* DECAWM reset */
+    CHECK(!(s.mode & MODE_AUTOWRAP));
+
+    screen_set_mode(&s, MODE_AUTOWRAP, 1);         /* DECAWM set */
+    CHECK(s.mode & MODE_AUTOWRAP);
+    CHECK(!(s.mode & MODE_CURSOR_VISIBLE));        /* still hidden */
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -365,6 +386,7 @@ int main(void)
     test_insert_delete_chars();
     test_set_attr_sgr();
     test_save_restore_cursor();
+    test_modes_default_and_toggle();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }
