@@ -54,7 +54,7 @@ Non-goals for this slice: networking, SSH/crypto, colour, scrollback history, do
 
 **To confirm at M1 (no invented APIs — finalise empirically):**
 - The exact **bits-3–5 hi-res colour code for white-on-black** (checked on ZEsarUX via screen dump; `000` = black-on-white is *not* it — see D9).
-- Our own `hires.c` address math produces the right screen bytes (host-tested vs the verified formula; dump screen RAM with `z88dk-ticks` to confirm on target).
+- ✅ **Confirmed (M1):** our own `hires.c` address math produces the right screen bytes — host-tested (9 checks) and verified byte-exact on ZEsarUX TC2048 via ZRCP (`test/zesarux_smoke.py`). Hi-res display renders crisp 64-col text in the GUI.
 - Hi-res memory **contention** and **full-screen render cost** — measure with `z88dk-ticks` before claiming any refresh rate (see §11); the game measured ~9,000 T per 8×8 C blit, so full-repaint paths are a real cost.
 - Reverse-video and cursor rendering look correct on ZEsarUX (ZRCP screenshot / RAM dump — automatable, plus a human glance).
 
@@ -237,7 +237,7 @@ Notes: still build `+zx` (TC2048 is Spectrum-compatible; hi-res is a runtime SCL
 ## 12. Open items to resolve during planning / M1
 
 1. ~~Does `ts_vmod` / `tshr_*` link under `+zx`?~~ **Resolved (review):** no — own the address math (D8, `hires.c`). Remaining: host-test our formula and confirm screen RAM on target.
-2. Exact **bits-3–5 white-on-black palette code** for hi-res (D9) — confirm in ZEsarUX (screenshot / screen dump).
+2. **bits-3–5 palette:** M1 ran black-on-white (mode `0x06`) and it reads great in the GUI. White-on-black (D9) is now a **preference**, not a blocker — flip bits 3–5 if wanted. Note: headless `save-screen` captures only the standard ULA layer (352×304), so palette/visual checks need the GUI, not the headless dump.
 3. Own embedded 8×8 font vs copying the Spectrum ROM font (`0x3D00`).
 4. ~~Include DEC line-drawing charset?~~ Yes (should-have); font glyphs must touch cell edges.
 5. Cursor blink: implement now (needs `im1;ei` + frame counter) or static block first.
@@ -249,7 +249,7 @@ Notes: still build `+zx` (TC2048 is Spectrum-compatible; hi-res is a runtime SCL
 
 ## 13. Milestones
 
-1. **M1 — hi-res smoke test:** `+zx` build enters hi-res (raw `OUT 0xFF`, white-on-black), draws fixed 8×8 text on the 64×24 grid on ZEsarUX (`--machine TC2048`) using our own `hires.c` address math (host-tested first). Confirms mode byte, palette code, and the address formula on target — verified by a ZRCP screen/RAM dump.
+1. **M1 — hi-res smoke test:** ✅ **DONE (2026-06-22).** `+zx` build autoloads on ZEsarUX `--machine TC2048` and enters hi-res; `main.c` draws ASCII on the 64×24 grid from the ROM 8×8 font via our own `hires.c` math. Verified **two ways**: a ZRCP byte-exact RAM check (`test/zesarux_smoke.py` — on-screen glyph bytes for 'T'/file0 and 'C'/file1 match the ROM font) and a **visual GUI check (crisp 64-column text)**. Palette is currently **black-on-white** (mode `0x06`, bits 3–5 = 0); white-on-black (D9) is an optional flip.
 2. **M2 — pure core:** `vtparse` + `screen` host-TDD over the §6 subset (red/green/refactor). *(In progress: `screen.c` `init`/`putc`/`cup`/`scroll` green.)*
 3. **M3 — render + loop:** dirty-row `render` + the poll loop driven by the baked demo stream; verified on ZEsarUX (screenshot + ZRCP RAM assertions).
 4. **M4 — keyboard + loopback:** `keymap` (Ctrl/Meta/cursor) + local echo through `conn`, so typing shows on screen.
