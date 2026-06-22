@@ -272,3 +272,16 @@ void screen_set_mode(screen_t *s, u8 bits, u8 on)
         s->mode &= (u8)~bits;
     }
 }
+
+void screen_set_scroll_region(screen_t *s, u8 top, u8 bot)
+{
+    if (bot >= ROWS) {
+        bot = ROWS - 1;
+    }
+    if (top >= bot) {
+        return;                  /* degenerate / out of range: ignore (VT-100) */
+    }
+    s->top = top;
+    s->bot = bot;
+    screen_cup(s, 0, 0);         /* DECSTBM homes the cursor */
+}

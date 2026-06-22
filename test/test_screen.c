@@ -428,6 +428,38 @@ static void test_putc_deferred_wrap(void)
     CHECK(s.cx == 1 && s.cy == 2);
 }
 
+static void test_set_scroll_region(void)
+{
+    screen_t s;
+    screen_init(&s);
+
+    screen_cup(&s, 5, 5);
+    screen_set_scroll_region(&s, 2, 8);
+    CHECK(s.top == 2 && s.bot == 8);
+    CHECK(s.cx == 0 && s.cy == 0);             /* DECSTBM homes the cursor */
+
+    screen_set_scroll_region(&s, 3, 100);      /* bot past last row -> clamp */
+    CHECK(s.top == 3 && s.bot == ROWS - 1);
+
+    screen_set_scroll_region(&s, 10, 4);       /* degenerate -> ignored */
+    CHECK(s.top == 3 && s.bot == ROWS - 1);
+    screen_set_scroll_region(&s, 7, 7);        /* single line -> ignored */
+    CHECK(s.top == 3 && s.bot == ROWS - 1);
+
+    screen_set_scroll_region(&s, 0, ROWS - 1); /* reset to full screen */
+    CHECK(s.top == 0 && s.bot == ROWS - 1);
+
+    /* The set region actually governs scrolling (lf at region bottom). */
+    screen_set_scroll_region(&s, 1, 3);
+    stamp_rows(&s);                            /* col 0 = A B C D E ... */
+    screen_cup(&s, 3, 0);                      /* bottom of region */
+    screen_lf(&s);                             /* scroll region [1..3] up */
+    CHECK(s.cells[1][0].ch == 'C');            /* row 1 <- old row 2 */
+    CHECK(s.cells[3][0].ch == BLANK_CH);       /* freed bottom of region */
+    CHECK(s.cells[0][0].ch == 'A');            /* above region untouched */
+    CHECK(s.cells[4][0].ch == 'E');            /* below region untouched */
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -446,6 +478,7 @@ int main(void)
     test_save_restore_cursor();
     test_modes_default_and_toggle();
     test_putc_deferred_wrap();
+    test_set_scroll_region();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }

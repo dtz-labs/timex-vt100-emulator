@@ -130,4 +130,10 @@ void screen_restore_cursor(screen_t *s);
  * DECTCEM (?25) -> MODE_CURSOR_VISIBLE. */
 void screen_set_mode(screen_t *s, u8 bits, u8 on);
 
+/* Set the scroll region to rows [top..bot] (0-based, inclusive) and home the
+ * cursor (DECSTBM, CSI top;bot r). Ignored if the region is degenerate
+ * (top >= bot); bot past the last row is clamped. vtparse converts the 1-based
+ * VT-100 params and passes (0, ROWS-1) for the reset-to-full-screen form. */
+void screen_set_scroll_region(screen_t *s, u8 top, u8 bot);
+
 #endif /* SCREEN_H */
