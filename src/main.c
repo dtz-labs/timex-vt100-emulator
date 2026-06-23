@@ -1,13 +1,13 @@
 /*
  * main.c -- M3 terminal emulator main loop.
  *
- * Initializes hi-res video, screen grid, and VT parser; then feeds a demo
- * VT-100 stream through the parser and renders to the display.
+ * Initializes hi-res video, screen grid, and VT parser; then feeds a startup
+ * help stream through the parser and renders it to the display.
  *
  * Keyboard sampling runs from the frame interrupt; main drains the captured
  * bytes to conn TX and does the slower terminal/render work.
  *
- * Demo stream: box with line-drawing, SGR test, then a scroll-region test.
+ * Startup stream: box with line-drawing, SGR test, and bridge usage notes.
  * After the baked stream, the default conn backend loops keyboard bytes back.
  * A real Interface 1 RS-232 backend can be selected at build time.
  */
@@ -25,55 +25,21 @@ static const u8 demo_stream[] =
     "\x1b[2J"
     "\x1b[H"
     "\x1b(0"
-    "lqqqqqqqqqqqqqqqqqqqqqqqqqk\r\n"
-    "x VT-100 TERMINAL         x\r\n"
-    "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDER\x1b[0m         x\r\n"
-    "mqqqqqqqqqqqqqqqqqqqqqqqqqj"
+    "lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk\r\n"
+    "x VT-102 TERMINAL EMULATOR          x\r\n"
+    "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test          x\r\n"
+    "mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj"
     "\x1b(B"
     "\x1b[6;1H"
-    "Scrolling region below:"
-    "\x1b[7;24r"
-    "\x1b[7;1H"
-    "scroll 01\r\n"
-    "scroll 02\r\n"
-    "scroll 03\r\n"
-    "scroll 04\r\n"
-    "scroll 05\r\n"
-    "scroll 06\r\n"
-    "scroll 07\r\n"
-    "scroll 08\r\n"
-    "scroll 09\r\n"
-    "scroll 10\r\n"
-    "scroll 11\r\n"
-    "scroll 12\r\n"
-    "scroll 13\r\n"
-    "scroll 14\r\n"
-    "scroll 15\r\n"
-    "scroll 16\r\n"
-    "scroll 17\r\n"
-    "scroll 18\r\n"
-    "scroll 19\r\n"
-    "scroll 20\r\n"
-    "scroll 21\r\n"
-    "scroll 22\r\n"
-    "scroll 23\r\n"
-    "scroll 24\r\n"
-    "scroll 25\r\n"
-    "scroll 26\r\n"
-    "scroll 27\r\n"
-    "scroll 28\r\n"
-    "scroll 29\r\n"
-    "scroll 30\r\n"
-    "scroll 31\r\n"
-    "scroll 32\r\n"
-    "scroll 33\r\n"
-    "scroll 34\r\n"
-    "scroll 35\r\n"
-    "scroll 36\r\n"
-    "scroll 37\r\n"
-    "scroll 38\r\n"
-    "scroll 39\r\n"
-    "scroll 40";
+    "Bridge quick help:\r\n"
+    "  macOS -> Timex: pipe text through bridge.\r\n"
+    "  Timex -> macOS: type here; bridge writes stdout.\r\n"
+    "  make bridge-zrcp: immediate keys + local echo.\r\n"
+    "  For text files, use --input-newline crlf.\r\n"
+    "  ENTER sends CR. CAPS+0 sends Ctrl-H backspace.\r\n"
+    "  SYMBOL+0 sends underscore (_). Raw mode is optional.\r\n"
+    "\r\n"
+    "Ready.";
 
 static volatile u8 key_overrun;
 static volatile u8 keyboard_settle_frames;
@@ -311,6 +277,4 @@ int main(void)
         pump_vt_replies(&vt);
         conn_poll();
     }
-
-    return 0;
 }

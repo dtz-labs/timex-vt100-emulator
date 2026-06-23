@@ -13,9 +13,47 @@ enum {
     VT_S_GROUND = 0,
     VT_S_ESC,          /* ESC seen, awaiting the next byte                 */
     VT_S_CSI,          /* ESC [ seen, collecting params / awaiting final   */
+    VT_S_ESC_HASH,     /* ESC # seen, awaiting a DEC test selector         */
     VT_S_CHARSET_G0,   /* ESC ( seen, awaiting the G0 charset selector     */
     VT_S_CHARSET_G1    /* ESC ) seen, awaiting the G1 charset selector     */
 };
+
+static u8 tab_mask(u8 col)
+{
+    return (u8)(1u << (col & 7u));
+}
+
+static void tab_set(vtparse_t *vt, u8 col)
+{
+    vt->tabs[col >> 3] |= tab_mask(col);
+}
+
+static void tab_clear(vtparse_t *vt, u8 col)
+{
+    vt->tabs[col >> 3] &= (u8)~tab_mask(col);
+}
+
+static u8 tab_is_set(const vtparse_t *vt, u8 col)
+{
+    return (vt->tabs[col >> 3] & tab_mask(col)) != 0;
+}
+
+static void tabs_clear_all(vtparse_t *vt)
+{
+    u8 i;
+    for (i = 0; i < VT_TAB_BYTES; ++i) {
+        vt->tabs[i] = 0;
+    }
+}
+
+static void tabs_reset_defaults(vtparse_t *vt)
+{
+    u8 col;
+    tabs_clear_all(vt);
+    for (col = 8; col < COLS; col = (u8)(col + 8u)) {
+        tab_set(vt, col);
+    }
+}
 
 void vt_init(vtparse_t *vt)
 {
@@ -28,20 +66,35 @@ void vt_init(vtparse_t *vt)
     vt->g1 = 'B';
     vt->gl = 0;                    /* GL = G0 */
     vt->nout = 0;
+    tabs_reset_defaults(vt);
     for (i = 0; i < VT_MAX_PARAMS; ++i) {
         vt->params[i] = 0;
     }
 }
 
-/* Advance the cursor to the next horizontal tab stop (every 8 columns),
- * clamped to the last column. */
-static void do_tab(screen_t *s)
+/* Advance the cursor to the next horizontal tab stop, clamped to the last
+ * column if no later stop is set. */
+static void do_tab(vtparse_t *vt, screen_t *s)
 {
-    u8 stop = (u8)(((s->cx / 8u) + 1u) * 8u);
-    if (stop >= COLS) {
-        stop = COLS - 1;
+    u8 col;
+    for (col = (u8)(s->cx + 1u); col < COLS; ++col) {
+        if (tab_is_set(vt, col)) {
+            screen_cup(s, s->cy, col);
+            return;
+        }
     }
-    screen_cup(s, s->cy, stop);
+    screen_cup(s, s->cy, COLS - 1);
+}
+
+static void do_backspace(screen_t *s)
+{
+    if (s->cx == 0) {
+        return;
+    }
+    screen_cup(s, s->cy, (u8)(s->cx - 1u));
+    s->cells[s->cy][s->cx].ch = BLANK_CH;
+    s->cells[s->cy][s->cx].attr = 0;
+    s->dirty[s->cy] = 1;
 }
 
 /* Translate a printable byte through the active charset. In DEC special
@@ -63,21 +116,25 @@ static u8 charset_translate(const vtparse_t *vt, u8 b)
 static void ground_byte(vtparse_t *vt, screen_t *s, u8 b)
 {
     if (b >= 0x20 && b != 0x7F) {     /* printable (incl. 0xA0-0xFF for now) */
+        if (s->mode & MODE_INSERT) {
+            screen_insert_chars(s, 1);
+        }
         screen_putc(s, charset_translate(vt, b));
         return;
     }
     switch (b) {
-    case 0x08:                        /* BS: left one, stop at column 0 */
-        if (s->cx > 0) {
-            screen_cup(s, s->cy, (u8)(s->cx - 1));
-        }
+    case 0x08:                        /* BS: destructive backspace */
+        do_backspace(s);
         break;
     case 0x09:                        /* HT */
-        do_tab(s);
+        do_tab(vt, s);
         break;
     case 0x0A:                        /* LF */
     case 0x0B:                        /* VT  -> treated as LF */
     case 0x0C:                        /* FF  -> treated as LF */
+        if (s->mode & MODE_NEWLINE) {
+            screen_cr(s);
+        }
         screen_lf(s);
         break;
     case 0x0D:                        /* CR */
@@ -146,6 +203,34 @@ static void cursor_move(screen_t *s, int dy, int dx)
     screen_cup(s, (u8)ny, (u8)nx);
 }
 
+static void cursor_home(screen_t *s)
+{
+    screen_cup(s, (s->mode & MODE_ORIGIN) ? s->top : 0, 0);
+}
+
+static void cursor_position(screen_t *s, u8 row1, u8 col1)
+{
+    u8 row = (u8)(row1 - 1u);
+    u8 col = (u8)(col1 - 1u);
+    if (s->mode & MODE_ORIGIN) {
+        row = (u8)(s->top + row);
+        if (row > s->bot) {
+            row = s->bot;
+        }
+    }
+    screen_cup(s, row, col);
+}
+
+static void cursor_column(screen_t *s, u8 col1)
+{
+    screen_cup(s, s->cy, (u8)(col1 - 1u));
+}
+
+static void cursor_row(screen_t *s, u8 row1)
+{
+    cursor_position(s, row1, (u8)(s->cx + 1u));
+}
+
 /* Begin a fresh CSI sequence: clear params and the private marker. */
 static void csi_reset(vtparse_t *vt)
 {
@@ -167,16 +252,30 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
     case 'B': cursor_move(s,  (int)param1(vt, 0), 0); break;  /* CUD */
     case 'C': cursor_move(s, 0,  (int)param1(vt, 0)); break;  /* CUF */
     case 'D': cursor_move(s, 0, -(int)param1(vt, 0)); break;  /* CUB */
+    case 'E': cursor_move(s,  (int)param1(vt, 0), 0); screen_cr(s); break;  /* CNL */
+    case 'F': cursor_move(s, -(int)param1(vt, 0), 0); screen_cr(s); break;  /* CPL */
+    case 'G':                                                 /* CHA */
+    case '`': cursor_column(s, param1(vt, 0)); break;         /* HPA */
     case 'H':                                                 /* CUP */
     case 'f':                                                 /* HVP */
-        screen_cup(s, (u8)(param1(vt, 0) - 1u), (u8)(param1(vt, 1) - 1u));
+        cursor_position(s, param1(vt, 0), param1(vt, 1));
         break;
+    case 'd': cursor_row(s, param1(vt, 0)); break;            /* VPA */
     case 'J': screen_erase_display(s, param0(vt, 0)); break;  /* ED  */
     case 'K': screen_erase_line(s, param0(vt, 0));    break;  /* EL  */
     case 'L': screen_insert_lines(s, param1(vt, 0));  break;  /* IL  */
     case 'M': screen_delete_lines(s, param1(vt, 0));  break;  /* DL  */
     case '@': screen_insert_chars(s, param1(vt, 0));  break;  /* ICH */
     case 'P': screen_delete_chars(s, param1(vt, 0));  break;  /* DCH */
+    case 'g': {                                               /* TBC */
+        u8 mode = param0(vt, 0);
+        if (mode == 0) {
+            tab_clear(vt, s->cx);
+        } else if (mode == 3) {
+            tabs_clear_all(vt);
+        }
+        break;
+    }
     case 'n':                                                 /* DSR */
         if (param0(vt, 0) == 6) {           /* cursor position report */
             emit(vt, 0x1B);
@@ -223,13 +322,25 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
             for (i = 0; i < vt->nparams; ++i) {
                 switch (vt->params[i]) {
                 case 1:  screen_set_mode(s, MODE_CURSOR_APPLICATION, on); break;  /* DECCKM */
+                case 6:                                             /* DECOM */
+                    screen_set_mode(s, MODE_ORIGIN, on);
+                    cursor_home(s);
+                    break;
                 case 7:  screen_set_mode(s, MODE_AUTOWRAP, on);           break;  /* DECAWM */
                 case 25: screen_set_mode(s, MODE_CURSOR_VISIBLE, on);     break;  /* DECTCEM */
                 default: break;
                 }
             }
+        } else {
+            u8 i;
+            for (i = 0; i < vt->nparams; ++i) {
+                switch (vt->params[i]) {
+                case 4:  screen_set_mode(s, MODE_INSERT, on);  break;  /* IRM */
+                case 20: screen_set_mode(s, MODE_NEWLINE, on); break;  /* LNM */
+                default: break;
+                }
+            }
         }
-        /* non-private ANSI modes: none in the §6 subset -> ignored */
         break;
     }
     default:
@@ -281,6 +392,29 @@ static void charset_byte(vtparse_t *vt, u8 *gx, u8 b)
     vt->state = VT_S_GROUND;
 }
 
+static void dec_alignment_test(screen_t *s)
+{
+    u8 r, c;
+    for (r = 0; r < ROWS; ++r) {
+        for (c = 0; c < COLS; ++c) {
+            s->cells[r][c].ch = 'E';
+            s->cells[r][c].attr = 0;
+        }
+        s->dirty[r] = 1;
+    }
+    s->attr = 0;
+    s->wrap_pending = 0;
+    screen_cup(s, 0, 0);
+}
+
+static void esc_hash_byte(vtparse_t *vt, screen_t *s, u8 b)
+{
+    if (b == '8') {
+        dec_alignment_test(s);                    /* DECALN */
+    }
+    vt->state = VT_S_GROUND;
+}
+
 /* ESC state: dispatch the single-byte escape finals of the §6 subset, enter the
  * CSI state, or begin a G0/G1 charset designation. */
 static void esc_byte(vtparse_t *vt, screen_t *s, u8 b)
@@ -289,12 +423,14 @@ static void esc_byte(vtparse_t *vt, screen_t *s, u8 b)
     case '[':  vt->state = VT_S_CSI; csi_reset(vt); return;  /* CSI entry */
     case '(':  vt->state = VT_S_CHARSET_G0; return;          /* designate G0 */
     case ')':  vt->state = VT_S_CHARSET_G1; return;          /* designate G1 */
+    case '#':  vt->state = VT_S_ESC_HASH; return;            /* DEC tests */
     case 'D':  screen_lf(s); break;                 /* IND  */
     case 'M':  screen_ri(s); break;                 /* RI   */
     case 'E':  screen_cr(s); screen_lf(s); break;   /* NEL  */
+    case 'H':  tab_set(vt, s->cx); break;           /* HTS  */
     case '7':  screen_save_cursor(s); break;        /* DECSC */
     case '8':  screen_restore_cursor(s); break;     /* DECRC */
-    case 'c':  screen_init(s); break;               /* RIS  */
+    case 'c':  screen_init(s); vt_init(vt); return; /* RIS  */
     default:   break;                               /* unsupported: ignore */
     }
     vt->state = VT_S_GROUND;
@@ -312,6 +448,9 @@ void vt_feed(vtparse_t *vt, screen_t *s, u8 b)
         break;
     case VT_S_CSI:
         csi_byte(vt, s, b);
+        break;
+    case VT_S_ESC_HASH:
+        esc_hash_byte(vt, s, b);
         break;
     case VT_S_CHARSET_G0:
         charset_byte(vt, &vt->g0, b);

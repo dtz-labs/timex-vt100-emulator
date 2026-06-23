@@ -22,6 +22,20 @@
 #define CONN_STATUS_IF1_MISSING 0x04u
 #define CONN_STATUS_INIT_ERROR  0x08u
 
+#define CONN_ZRCP_INJECT_MAX 32u
+#define CONN_ZRCP_OUTPUT_MAX 32u
+#define CONN_ZRCP_BRIDGE_ENABLE 0x01u
+#define CONN_ZRCP_BRIDGE_LOCAL_ECHO 0x02u
+#define CONN_ZRCP_BRIDGE_LOCAL_ECHO_CRLF 0x04u
+
+#ifndef CONN_BACKEND_IF1
+extern volatile u8 conn_zrcp_bridge_flags;
+extern volatile u8 conn_zrcp_inject_len;
+extern volatile u8 conn_zrcp_inject_data[CONN_ZRCP_INJECT_MAX];
+extern volatile u8 conn_zrcp_output_len;
+extern volatile u8 conn_zrcp_output_data[CONN_ZRCP_OUTPUT_MAX];
+#endif
+
 void conn_init(void);
 void conn_poll(void);
 

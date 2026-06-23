@@ -286,6 +286,7 @@ void screen_restore_cursor(screen_t *s)
     s->cx = s->saved_cx;
     s->cy = s->saved_cy;
     s->attr = s->saved_attr;
+    s->wrap_pending = 0;
 }
 
 void screen_set_mode(screen_t *s, u8 bits, u8 on)
@@ -307,5 +308,5 @@ void screen_set_scroll_region(screen_t *s, u8 top, u8 bot)
     }
     s->top = top;
     s->bot = bot;
-    screen_cup(s, 0, 0);         /* DECSTBM homes the cursor */
+    screen_cup(s, (s->mode & MODE_ORIGIN) ? top : 0, 0);  /* DECSTBM homes */
 }

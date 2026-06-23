@@ -101,13 +101,13 @@ static void test_existing_caps_mappings_still_work(void)
     CHECK(out[0] == 'A');
 
     CHECK(decode_new_key(held, 4, 0, out) == 1); /* CAPS+0 */
-    CHECK(out[0] == '_');
+    CHECK(out[0] == 0x08);
 
     CHECK(decode_new_key(held, 3, 4, out) == 1); /* CAPS+5 */
     CHECK(out[0] == '%');
 }
 
-static void test_caps_digits_match_symbol_digits(void)
+static void test_caps_digits_match_symbol_digits_except_backspace(void)
 {
     u8 held[KEYMAP_ROWS] = { 0 };
     u8 out[KEYMAP_OUT_MAX] = { 0xAA, 0xAA, 0xAA };
@@ -134,7 +134,7 @@ static void test_caps_digits_match_symbol_digits(void)
     CHECK(decode_new_key(held, 4, 1, out) == 1); /* CAPS+9 */
     CHECK(out[0] == ')');
     CHECK(decode_new_key(held, 4, 0, out) == 1); /* CAPS+0 */
-    CHECK(out[0] == '_');
+    CHECK(out[0] == 0x08);
 }
 
 static void test_control_digit_cursor_keys(void)
@@ -191,6 +191,9 @@ static void test_symbol_shift_punctuation(void)
 
     CHECK(decode_new_key(held, 3, 0, out) == 1); /* Symbol+1 */
     CHECK(out[0] == '!');
+
+    CHECK(decode_new_key(held, 4, 0, out) == 1); /* Symbol+0 */
+    CHECK(out[0] == '_');
 
     CHECK(decode_new_key(held, 5, 0, out) == 1); /* Symbol+P */
     CHECK(out[0] == '"');
@@ -253,7 +256,7 @@ int main(void)
     test_control_chords_require_both_shifts();
     test_simultaneous_modifier_and_key_is_not_lost();
     test_existing_caps_mappings_still_work();
-    test_caps_digits_match_symbol_digits();
+    test_caps_digits_match_symbol_digits_except_backspace();
     test_control_digit_cursor_keys();
     test_symbol_shift_punctuation();
     test_key_repeat_for_held_keys();

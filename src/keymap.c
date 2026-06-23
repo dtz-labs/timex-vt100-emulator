@@ -168,6 +168,9 @@ static u8 map_key(u8 *out, u8 max, u8 row, u8 bit, u8 caps_down, u8 sym_down)
     if (sym_down) {
         return map_symbol(out, max, ch);
     }
+    if (caps_down && row == 4u && bit == 0u) {
+        return emit_byte(out, max, 0x08); /* CAPS+0 = Backspace / C-H */
+    }
     if (caps_down && (row == 3u || row == 4u)) {
         return map_symbol(out, max, ch);
     }

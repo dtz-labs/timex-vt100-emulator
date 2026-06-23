@@ -358,6 +358,9 @@ static void test_modes_default_and_toggle(void)
     CHECK(s.mode & MODE_AUTOWRAP);
     CHECK(s.mode & MODE_CURSOR_VISIBLE);
     CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
+    CHECK(!(s.mode & MODE_ORIGIN));
+    CHECK(!(s.mode & MODE_INSERT));
+    CHECK(!(s.mode & MODE_NEWLINE));
 
     screen_set_mode(&s, MODE_CURSOR_VISIBLE, 0);   /* DECTCEM reset: hide */
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
@@ -374,6 +377,15 @@ static void test_modes_default_and_toggle(void)
     CHECK(s.mode & MODE_CURSOR_APPLICATION);
     screen_set_mode(&s, MODE_CURSOR_APPLICATION, 0); /* DECCKM reset */
     CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
+
+    screen_set_mode(&s, MODE_ORIGIN | MODE_INSERT | MODE_NEWLINE, 1);
+    CHECK(s.mode & MODE_ORIGIN);
+    CHECK(s.mode & MODE_INSERT);
+    CHECK(s.mode & MODE_NEWLINE);
+    screen_set_mode(&s, MODE_ORIGIN | MODE_INSERT | MODE_NEWLINE, 0);
+    CHECK(!(s.mode & MODE_ORIGIN));
+    CHECK(!(s.mode & MODE_INSERT));
+    CHECK(!(s.mode & MODE_NEWLINE));
 }
 
 static void test_putc_deferred_wrap(void)
@@ -454,6 +466,12 @@ static void test_set_scroll_region(void)
 
     screen_set_scroll_region(&s, 0, ROWS - 1); /* reset to full screen */
     CHECK(s.top == 0 && s.bot == ROWS - 1);
+
+    screen_set_mode(&s, MODE_ORIGIN, 1);
+    screen_set_scroll_region(&s, 4, 9);
+    CHECK(s.top == 4 && s.bot == 9);
+    CHECK(s.cx == 0 && s.cy == 4);             /* DECOM home = top margin */
+    screen_set_mode(&s, MODE_ORIGIN, 0);
 
     /* The set region actually governs scrolling (lf at region bottom). */
     screen_set_scroll_region(&s, 1, 3);

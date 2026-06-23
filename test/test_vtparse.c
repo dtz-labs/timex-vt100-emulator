@@ -49,13 +49,32 @@ static void test_c0_controls(void)
     CHECK(s.cells[0][0].ch == 'X');
     CHECK(s.cy == 1 && s.cx == 1);
 
-    /* BS moves left and stops at column 0 */
+    /* BS is destructive: move left and blank the erased cell. */
+    screen_init(&s);
+    feed(&vt, &s, "asdf\x08" "1");
+    CHECK(s.cells[0][0].ch == 'a');
+    CHECK(s.cells[0][1].ch == 's');
+    CHECK(s.cells[0][2].ch == 'd');
+    CHECK(s.cells[0][3].ch == '1');
+    CHECK(s.cx == 4 && s.cy == 0);
+
+    screen_init(&s);
+    feed(&vt, &s, "asdf\x08\x08\x08\x08" "123");
+    CHECK(s.cells[0][0].ch == '1');
+    CHECK(s.cells[0][1].ch == '2');
+    CHECK(s.cells[0][2].ch == '3');
+    CHECK(s.cells[0][3].ch == BLANK_CH);
+    CHECK(s.cx == 3 && s.cy == 0);
+
     screen_cup(&s, 1, 3);
     vt_feed(&vt, &s, 0x08);
     CHECK(s.cx == 2 && s.cy == 1);
+    CHECK(s.cells[1][2].ch == BLANK_CH);
     screen_cup(&s, 1, 0);
+    s.cells[1][0].ch = 'X';
     vt_feed(&vt, &s, 0x08);
     CHECK(s.cx == 0);
+    CHECK(s.cells[1][0].ch == 'X');
 
     /* HT advances to the next multiple of 8, clamped to the last column */
     screen_cup(&s, 2, 0);
@@ -141,6 +160,15 @@ static void test_csi_cursor_moves(void)
     feed(&vt, &s, "\x1b" "[3;3f");
     CHECK(s.cy == 2 && s.cx == 2);
 
+    /* CHA/HPA/VPA address one axis, defaulting/clamping like CUP */
+    screen_cup(&s, 2, 1);
+    feed(&vt, &s, "\x1b" "[10G");
+    CHECK(s.cy == 2 && s.cx == 9);
+    feed(&vt, &s, "\x1b" "[12`");
+    CHECK(s.cy == 2 && s.cx == 11);
+    feed(&vt, &s, "\x1b" "[6d");
+    CHECK(s.cy == 5 && s.cx == 11);
+
     /* CUU / CUD / CUF / CUB with explicit counts */
     screen_cup(&s, 10, 10);
     feed(&vt, &s, "\x1b" "[3A");
@@ -155,6 +183,14 @@ static void test_csi_cursor_moves(void)
     /* default count is 1 (ESC[A) */
     feed(&vt, &s, "\x1b" "[A");
     CHECK(s.cy == 8 && s.cx == 9);
+
+    /* CNL / CPL move vertically and return to column zero */
+    screen_cup(&s, 5, 7);
+    feed(&vt, &s, "\x1b" "[2E");
+    CHECK(s.cy == 7 && s.cx == 0);
+    screen_cup(&s, 5, 7);
+    feed(&vt, &s, "\x1b" "[3F");
+    CHECK(s.cy == 2 && s.cx == 0);
 
     /* moves clamp at the edges, never wrap */
     screen_cup(&s, 0, 0);
@@ -231,6 +267,23 @@ static void test_csi_erase_and_edit(void)
     screen_cup(&s, 0, 0);
     feed(&vt, &s, "\x1b" "[2P");
     CHECK(s.cells[0][0].ch == 'C');
+
+    /* IRM insert mode: printable bytes shift the row before writing. */
+    screen_init(&s);
+    feed(&vt, &s, "ABC");
+    screen_cup(&s, 0, 1);
+    feed(&vt, &s, "\x1b" "[4h");
+    CHECK(s.mode & MODE_INSERT);
+    feed(&vt, &s, "X");
+    CHECK(s.cells[0][0].ch == 'A');
+    CHECK(s.cells[0][1].ch == 'X');
+    CHECK(s.cells[0][2].ch == 'B');
+    CHECK(s.cells[0][3].ch == 'C');
+    feed(&vt, &s, "\x1b" "[4l");
+    CHECK(!(s.mode & MODE_INSERT));
+    feed(&vt, &s, "Z");
+    CHECK(s.cells[0][2].ch == 'Z');
+    CHECK(s.cells[0][3].ch == 'C');
 }
 
 static void test_csi_sgr(void)
@@ -294,6 +347,21 @@ static void test_csi_scroll_region_and_modes(void)
     feed(&vt, &s, "\x1b" "[?1l");
     CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
 
+    /* DECOM origin mode: CUP/HVP rows are relative to the scroll region. */
+    feed(&vt, &s, "\x1b" "[5;10r");
+    feed(&vt, &s, "\x1b" "[?6h");
+    CHECK(s.mode & MODE_ORIGIN);
+    CHECK(s.cy == 4 && s.cx == 0);          /* home at top margin */
+    feed(&vt, &s, "\x1b" "[2;3H");
+    CHECK(s.cy == 5 && s.cx == 2);
+    feed(&vt, &s, "\x1b" "[99;4H");
+    CHECK(s.cy == 9 && s.cx == 3);          /* clamped to bottom margin */
+    feed(&vt, &s, "\x1b" "[?6l");
+    CHECK(!(s.mode & MODE_ORIGIN));
+    CHECK(s.cy == 0 && s.cx == 0);          /* reset homes absolute */
+    feed(&vt, &s, "\x1b" "[2;3H");
+    CHECK(s.cy == 1 && s.cx == 2);
+
     /* DECTCEM cursor hide / show (ESC[?25l / ESC[?25h) */
     feed(&vt, &s, "\x1b" "[?25l");
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
@@ -305,9 +373,20 @@ static void test_csi_scroll_region_and_modes(void)
     CHECK(!(s.mode & MODE_AUTOWRAP));
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
 
-    /* a non-private ANSI mode (ESC[4h IRM) is ignored, modes unchanged */
+    /* LNM newline mode: LF also returns to column zero when set. */
     feed(&vt, &s, "\x1b" "[?7;25h");
-    feed(&vt, &s, "\x1b" "[4h");
+    screen_cup(&s, 5, 5);
+    feed(&vt, &s, "\x1b" "[20h");
+    CHECK(s.mode & MODE_NEWLINE);
+    vt_feed(&vt, &s, 0x0A);
+    CHECK(s.cy == 6 && s.cx == 0);
+    screen_cup(&s, 5, 5);
+    feed(&vt, &s, "\x1b" "[20l");
+    CHECK(!(s.mode & MODE_NEWLINE));
+    vt_feed(&vt, &s, 0x0A);
+    CHECK(s.cy == 6 && s.cx == 5);
+
+    /* supported non-private ANSI modes do not disturb DEC private modes. */
     CHECK(s.mode & MODE_AUTOWRAP);
     CHECK(s.mode & MODE_CURSOR_VISIBLE);
 }
@@ -396,6 +475,52 @@ static void test_charset_line_drawing(void)
     CHECK(s.cells[0][1].ch == 'x');
 }
 
+static void test_tabs_and_alignment(void)
+{
+    vtparse_t vt;
+    screen_t s;
+    vt_init(&vt);
+    screen_init(&s);
+
+    /* Default HT stops are every 8 columns. */
+    screen_cup(&s, 0, 1);
+    vt_feed(&vt, &s, 0x09);
+    CHECK(s.cx == 8);
+
+    /* TBC 0 clears the current tab stop. */
+    screen_cup(&s, 0, 8);
+    feed(&vt, &s, "\x1b" "[g");
+    screen_cup(&s, 0, 1);
+    vt_feed(&vt, &s, 0x09);
+    CHECK(s.cx == 16);
+
+    /* TBC 3 clears all stops; HT then parks at the last column. */
+    feed(&vt, &s, "\x1b" "[3g");
+    screen_cup(&s, 0, 1);
+    vt_feed(&vt, &s, 0x09);
+    CHECK(s.cx == COLS - 1);
+
+    /* HTS sets a stop at the current column. */
+    screen_cup(&s, 0, 5);
+    feed(&vt, &s, "\x1b" "H");
+    screen_cup(&s, 0, 1);
+    vt_feed(&vt, &s, 0x09);
+    CHECK(s.cx == 5);
+
+    /* RIS resets the parser too, including default tab stops. */
+    feed(&vt, &s, "\x1b" "c");
+    screen_cup(&s, 0, 1);
+    vt_feed(&vt, &s, 0x09);
+    CHECK(s.cx == 8);
+
+    /* DECALN fills the full display with 'E' and homes the cursor. */
+    feed(&vt, &s, "\x1b" "#8");
+    CHECK(s.cells[0][0].ch == 'E');
+    CHECK(s.cells[ROWS - 1][COLS - 1].ch == 'E');
+    CHECK(s.cells[0][0].attr == 0);
+    CHECK(s.cy == 0 && s.cx == 0);
+}
+
 int main(void)
 {
     test_printables_write_and_advance();
@@ -407,6 +532,7 @@ int main(void)
     test_csi_scroll_region_and_modes();
     test_csi_device_queries();
     test_charset_line_drawing();
+    test_tabs_and_alignment();
     printf("vtparse: %d checks passed\n", checks);
     return 0;
 }

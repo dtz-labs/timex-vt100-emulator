@@ -18,6 +18,7 @@
 
 #define VT_MAX_PARAMS 16u   /* CSI numeric params kept (excess dropped)      */
 #define VT_OUT_MAX    16u   /* reply bytes buffered (DSR report ~ ESC[24;64R) */
+#define VT_TAB_BYTES  ((COLS + 7u) / 8u)  /* programmable HT stops bitmap     */
 
 typedef struct {
     u8 state;                      /* parser state (internal VT_S_* codes)   */
@@ -27,6 +28,7 @@ typedef struct {
     u8 priv;                       /* CSI private prefix byte 0x3C-0x3F, or 0 */
     u8 g0, g1;                      /* designated charsets: 'B' ASCII / '0' graph */
     u8 gl;                          /* active charset in GL: 0 = G0, 1 = G1    */
+    u8 tabs[VT_TAB_BYTES];          /* horizontal tab stops, one bit per column */
     u8 out[VT_OUT_MAX];            /* pending reply bytes for the host        */
     u8 nout;                       /* number of pending reply bytes           */
 } vtparse_t;

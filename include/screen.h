@@ -23,10 +23,13 @@
 #define ATTR_REVERSE   0x01u
 #define ATTR_UNDERLINE 0x02u
 
-/* Terminal mode bits (screen_t.mode). vtparse maps DEC private modes here. */
+/* Terminal mode bits (screen_t.mode). vtparse maps DEC/ANSI modes here. */
 #define MODE_AUTOWRAP           0x01u  /* DECAWM ?7 */
 #define MODE_CURSOR_VISIBLE     0x02u  /* DECTCEM ?25 */
 #define MODE_CURSOR_APPLICATION 0x04u  /* DECCKM ?1 */
+#define MODE_ORIGIN             0x08u  /* DECOM ?6 */
+#define MODE_INSERT             0x10u  /* IRM 4 */
+#define MODE_NEWLINE            0x20u  /* LNM 20 */
 
 #define BLANK_CH 0x20u   /* ASCII space: an "empty" cell */
 
@@ -42,7 +45,7 @@ typedef struct {
     u8 attr;          /* current SGR attribute, copied into cells on putc */
     u8 dirty[ROWS];   /* per-row dirty flag: non-zero => needs repaint    */
     u8 saved_cx, saved_cy, saved_attr;  /* DECSC/DECRC saved cursor + SGR */
-    u8 mode;          /* MODE_* bits (autowrap, cursor-visible)           */
+    u8 mode;          /* MODE_* bits                                      */
     u8 wrap_pending;  /* VT-100 deferred wrap: last column written, awaiting */
     u8 scroll_seq;    /* increments when screen_scroll() moves the region    */
     u8 last_scroll_top, last_scroll_bot;
@@ -133,7 +136,8 @@ void screen_restore_cursor(screen_t *s);
 void screen_set_mode(screen_t *s, u8 bits, u8 on);
 
 /* Set the scroll region to rows [top..bot] (0-based, inclusive) and home the
- * cursor (DECSTBM, CSI top;bot r). Ignored if the region is degenerate
+ * cursor (DECSTBM, CSI top;bot r). In origin mode, "home" means the top margin;
+ * otherwise it is absolute screen home. Ignored if the region is degenerate
  * (top >= bot); bot past the last row is clamped. vtparse converts the 1-based
  * VT-100 params and passes (0, ROWS-1) for the reset-to-full-screen form. */
 void screen_set_scroll_region(screen_t *s, u8 top, u8 bot);

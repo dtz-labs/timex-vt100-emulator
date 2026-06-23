@@ -4,7 +4,7 @@
  * Mapping:
  * - printable letters/digits/space
  * - CAPS+letters -> uppercase
- * - CAPS+digits -> same punctuation as SYMBOL+digits
+ * - CAPS+digits -> same punctuation as SYMBOL+digits, except CAPS+0 -> BS
  * - CAPS+SYMBOL+letter/space -> Control chords
  * - CAPS+SYMBOL+5/6/7/8 -> cursor left/down/up/right
  * - CAPS+SYMBOL+9/0 -> BS/DEL

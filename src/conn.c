@@ -89,6 +89,15 @@ static conn_ring_t rx_ring = { rx_buf, CONN_BUF_SIZE, 0, 0, 0 };
 static conn_ring_t tx_ring = { tx_buf, CONN_BUF_SIZE, 0, 0, 0 };
 static u8 conn_flags;
 
+#ifndef CONN_BACKEND_IF1
+volatile u8 conn_zrcp_bridge_flags;
+volatile u8 conn_zrcp_inject_len;
+volatile u8 conn_zrcp_inject_data[CONN_ZRCP_INJECT_MAX];
+volatile u8 conn_zrcp_output_len;
+volatile u8 conn_zrcp_output_data[CONN_ZRCP_OUTPUT_MAX];
+static u8 zrcp_local_echo_suppress_lf;
+#endif
+
 #ifdef CONN_BACKEND_IF1
 static u8 if1_ready;
 
@@ -191,6 +200,93 @@ static void ring_drop_one(conn_ring_t *r)
     }
 }
 
+#ifndef CONN_BACKEND_IF1
+static void poll_zrcp_inject(void)
+{
+    u8 i;
+    u8 n = conn_zrcp_inject_len;
+
+    if (n == 0) {
+        return;
+    }
+    if (n > CONN_ZRCP_INJECT_MAX) {
+        n = CONN_ZRCP_INJECT_MAX;
+        conn_flags |= CONN_STATUS_RX_OVERFLOW;
+    }
+    if (ring_space(&rx_ring) < n) {
+        return;
+    }
+    for (i = 0; i < n; ++i) {
+        ring_write_byte(&rx_ring, conn_zrcp_inject_data[i]);
+    }
+    conn_zrcp_inject_len = 0;
+}
+
+static void zrcp_local_echo_write(u8 b)
+{
+    if (ring_space(&rx_ring) == 0) {
+        conn_flags |= CONN_STATUS_RX_OVERFLOW;
+        return;
+    }
+    ring_write_byte(&rx_ring, b);
+}
+
+static void zrcp_local_echo_byte(u8 b)
+{
+    if ((conn_zrcp_bridge_flags & CONN_ZRCP_BRIDGE_LOCAL_ECHO) == 0) {
+        return;
+    }
+    if ((conn_zrcp_bridge_flags & CONN_ZRCP_BRIDGE_LOCAL_ECHO_CRLF) == 0) {
+        zrcp_local_echo_write(b);
+        return;
+    }
+
+    if (zrcp_local_echo_suppress_lf) {
+        zrcp_local_echo_suppress_lf = 0;
+        if (b == '\n') {
+            return;
+        }
+    }
+    if (b == '\r') {
+        zrcp_local_echo_write('\r');
+        zrcp_local_echo_write('\n');
+        zrcp_local_echo_suppress_lf = 1;
+        return;
+    }
+    if (b == '\n') {
+        zrcp_local_echo_write('\r');
+        zrcp_local_echo_write('\n');
+        return;
+    }
+    zrcp_local_echo_write(b);
+}
+
+static void poll_zrcp_output(void)
+{
+    u8 n = 0;
+
+    if ((conn_zrcp_bridge_flags & CONN_ZRCP_BRIDGE_ENABLE) == 0) {
+        return;
+    }
+    if (conn_zrcp_output_len != 0) {
+        if (tx_ring.used != 0) {
+            conn_flags |= CONN_STATUS_TX_BLOCKED;
+        }
+        return;
+    }
+    while (n < CONN_ZRCP_OUTPUT_MAX && tx_ring.used != 0) {
+        u8 b = ring_peek(&tx_ring);
+        conn_zrcp_output_data[n] = b;
+        zrcp_local_echo_byte(b);
+        ring_drop_one(&tx_ring);
+        ++n;
+    }
+    if (n != 0) {
+        conn_zrcp_output_len = n;
+    }
+}
+#endif
+
 void conn_init(void)
 {
     ring_reset(&rx_ring);
@@ -206,6 +302,11 @@ void conn_init(void)
     *((volatile u16 *)IF1_BAUD_SYSVAR) = CONN_IF1_BAUD_DIVISOR;
     *((volatile u8 *)IF1_SER_FL) = 0;
     if1_ready = 1;
+#else
+    conn_zrcp_bridge_flags = 0;
+    conn_zrcp_inject_len = 0;
+    conn_zrcp_output_len = 0;
+    zrcp_local_echo_suppress_lf = 0;
 #endif
 }
 
@@ -248,6 +349,13 @@ void conn_poll(void)
         ring_drop_one(&tx_ring);
     }
 #else
+    poll_zrcp_inject();
+
+    if ((conn_zrcp_bridge_flags & CONN_ZRCP_BRIDGE_ENABLE) != 0) {
+        poll_zrcp_output();
+        return;
+    }
+
     while (tx_ring.used != 0 && ring_space(&rx_ring) != 0) {
         u8 b = ring_peek(&tx_ring);
         ring_drop_one(&tx_ring);
