@@ -25,15 +25,24 @@ Simple command output and ASCII art:
 
 ## Requirements
 
-- macOS
+- macOS or Linux host with POSIX shell tools
 - ZEsarUX, default path:
   `/Applications/ZEsarUX.app/Contents/MacOS/zesarux`
-- z88dk, default path:
-  `~/Programowanie/z88dk`
+- z88dk, available as `zcc` on `PATH` or installed under a common prefix
 - Python 3
 
-The Makefile defaults match the local setup above. Override `ZX`, `Z88DK`, or
-`ZRCP_PORT` if needed.
+The Makefile auto-detects z88dk from `PATH` first and from common install
+prefixes such as Homebrew (`/opt/homebrew`, `/usr/local`), MacPorts
+(`/opt/local`), source installs (`/opt/z88dk`, `/usr/local/z88dk`), and `/usr`.
+Override `Z88DK_HOME`, `Z88DK`, `ZCC`, or `ZCCCFG` when z88dk lives somewhere
+else:
+
+```sh
+make tap Z88DK_HOME=/path/to/z88dk
+make tap ZCC=/path/to/zcc ZCCCFG=/path/to/z88dk/lib/config
+```
+
+Override `ZX` or `ZRCP_PORT` if needed.
 
 `ZRCP_PORT` is optional in the examples below. The default is `10001`; set it
 only when you want a fresh ZEsarUX remote-control port or you are running

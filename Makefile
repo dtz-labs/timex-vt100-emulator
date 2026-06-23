@@ -15,23 +15,56 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 RELEASE_NAME ?= timex-vt100-emulator-$(VERSION)
 
-Z88DK ?= $(HOME)/Programowanie/z88dk
-Z88DK_HOME ?= $(Z88DK)
-Z88DK_BIN ?= $(Z88DK_HOME)/bin
+Z88DK_COMMON_PREFIXES ?= \
+	$(HOME)/Programowanie/z88dk \
+	/opt/homebrew/opt/z88dk \
+	/opt/homebrew \
+	/usr/local/opt/z88dk \
+	/usr/local \
+	/opt/local \
+	/opt/z88dk \
+	/usr/local/z88dk \
+	/usr
+ZCC_USER := $(if $(filter undefined,$(origin ZCC)),,$(ZCC))
+Z88DK_USER_HOME := $(firstword $(Z88DK_HOME) $(Z88DK))
+Z88DK_SEARCH_PREFIXES := $(strip $(Z88DK_USER_HOME) $(Z88DK_COMMON_PREFIXES))
+Z88DK_DETECTED_HOME := $(firstword $(foreach dir,$(Z88DK_SEARCH_PREFIXES),$(if $(wildcard $(dir)/bin/zcc),$(dir))))
+ZCC_PATH := $(shell command -v zcc 2>/dev/null)
+ZCC_DETECTED := $(firstword \
+	$(ZCC_USER) \
+	$(ZCC_PATH) \
+	$(foreach dir,$(Z88DK_SEARCH_PREFIXES),$(if $(wildcard $(dir)/bin/zcc),$(dir)/bin/zcc)))
+Z88DK_DETECTED_FROM_ZCC := $(patsubst %/bin/zcc,%,$(filter %/bin/zcc,$(ZCC_DETECTED)))
+
+Z88DK_HOME ?= $(firstword $(Z88DK_USER_HOME) $(Z88DK_DETECTED_FROM_ZCC) $(Z88DK_DETECTED_HOME))
+Z88DK ?= $(Z88DK_HOME)
+Z88DK_BIN ?= $(if $(Z88DK_HOME),$(Z88DK_HOME)/bin)
 ifneq ($(wildcard $(Z88DK_BIN)),)
 export PATH := $(Z88DK_BIN):$(PATH)
 endif
-ifneq ($(wildcard $(Z88DK_HOME)/lib/config),)
-ZCCCFG ?= $(Z88DK_HOME)/lib/config
+
+ZCCCFG_CANDIDATES ?= \
+	$(if $(Z88DK_HOME),$(Z88DK_HOME)/lib/config) \
+	$(if $(Z88DK_HOME),$(Z88DK_HOME)/share/z88dk/lib/config) \
+	/opt/homebrew/share/z88dk/lib/config \
+	/usr/local/share/z88dk/lib/config \
+	/opt/local/share/z88dk/lib/config \
+	/usr/share/z88dk/lib/config \
+	/opt/z88dk/lib/config \
+	/usr/local/z88dk/lib/config
+ZCCCFG_DETECTED := $(firstword $(foreach dir,$(ZCCCFG_CANDIDATES),$(if $(wildcard $(dir)),$(dir))))
+ZCCCFG ?= $(ZCCCFG_DETECTED)
+ifneq ($(ZCCCFG),)
 export ZCCCFG
 endif
 
-ZCC ?= $(if $(wildcard $(Z88DK_BIN)/zcc),$(Z88DK_BIN)/zcc,zcc)
+ZCC ?= $(if $(ZCC_DETECTED),$(ZCC_DETECTED),zcc)
 Z88DK_TARGET ?= +zx
 Z88DK_CFLAGS ?= -SO3 -clib=sdcc_iy -iquote$(BUILD_DIR) -iquote$(CURDIR)/include
 Z88DK_DEFS ?=
 Z88DK_LDFLAGS ?= -m
-Z88DK_ENV = PATH="$(Z88DK_BIN):$(PATH)" $(if $(ZCCCFG),ZCCCFG="$(ZCCCFG)")
+Z88DK_PATH = $(if $(Z88DK_BIN),$(Z88DK_BIN):$(PATH),$(PATH))
+Z88DK_ENV = PATH="$(Z88DK_PATH)" $(if $(ZCCCFG),ZCCCFG="$(ZCCCFG)")
 
 CC ?= cc
 
@@ -174,19 +207,19 @@ $(BUILD_META): FORCE | $(BUILD_DIR)
 	if test -f "$@" && cmp -s "$$tmp" "$@"; then rm "$$tmp"; else mv "$$tmp" "$@"; fi
 
 check-z88dk:
-	@PATH="$(Z88DK_BIN):$(PATH)" command -v "$(ZCC)" >/dev/null 2>&1 || { \
+	@{ test -x "$(ZCC)" || PATH="$(Z88DK_PATH)" command -v "$(ZCC)" >/dev/null 2>&1; } || { \
 		echo "zcc not found: $(ZCC)"; \
-		echo "Set Z88DK=/path/to/z88dk, Z88DK_HOME=/path/to/z88dk, or ZCC=/path/to/zcc."; \
+		echo "Install z88dk so zcc is on PATH, or set Z88DK_HOME=/path/to/z88dk, Z88DK=/path/to/z88dk, or ZCC=/path/to/zcc."; \
 		exit 127; \
 	}
-	@PATH="$(Z88DK_BIN):$(PATH)" command -v z88dk-z80asm >/dev/null 2>&1 || { \
+	@PATH="$(Z88DK_PATH)" command -v z88dk-z80asm >/dev/null 2>&1 || { \
 		echo "z88dk-z80asm not found on PATH."; \
-		echo "Set Z88DK=/path/to/z88dk, Z88DK_HOME=/path/to/z88dk, or add z88dk/bin to PATH."; \
+		echo "Install z88dk so its tools are on PATH, or set Z88DK_HOME=/path/to/z88dk or Z88DK=/path/to/z88dk."; \
 		exit 127; \
 	}
 	@if [ -n "$(ZCCCFG)" ]; then test -d "$(ZCCCFG)" || { \
 		echo "ZCCCFG directory not found: $(ZCCCFG)"; \
-		echo "Set Z88DK=/path/to/z88dk, Z88DK_HOME=/path/to/z88dk, or ZCCCFG=/path/to/z88dk/lib/config."; \
+		echo "Set ZCCCFG=/path/to/z88dk/lib/config, or set Z88DK_HOME/Z88DK to the z88dk prefix."; \
 		exit 127; \
 	}; fi
 
@@ -231,6 +264,7 @@ print-vars:
 	@echo "ZRCP_CMD=$(ZRCP_CMD)"
 	@echo "TERMINFO_SRC=$(TERMINFO_SRC)"
 	@echo "TERMINFO_DIR=$(TERMINFO_DIR)"
+	@echo "Z88DK=$(Z88DK)"
 	@echo "Z88DK_HOME=$(Z88DK_HOME)"
 	@echo "Z88DK_BIN=$(Z88DK_BIN)"
 	@echo "ZCC=$(ZCC)"

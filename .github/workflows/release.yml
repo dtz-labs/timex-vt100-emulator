@@ -30,12 +30,15 @@ jobs:
             -e VERSION="$version" \
             -e BUILD_DATE="$build_date" \
             -e GIT_COMMIT="$git_commit" \
-            z88dk/z88dk:latest make release-build
-          sudo chown -R "$(id -u):$(id -g)" build dist
+            z88dk/z88dk:latest make tap if1
 
       - name: Package TAP files
         run: |
           set -eu
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp build/term.tap "dist/timex-vt100-emulator-${version}.tap"
+          cp build/term-if1.tap "dist/timex-vt100-emulator-${version}-if1.tap"
           tap_files=(dist/*.tap)
           test "${#tap_files[@]}" -eq 2
           zip -j "dist/timex-vt100-emulator-${GITHUB_REF_NAME}-taps.zip" \
