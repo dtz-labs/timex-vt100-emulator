@@ -31,6 +31,7 @@ typedef struct {
     u8 tabs[VT_TAB_BYTES];          /* horizontal tab stops, one bit per column */
     u8 out[VT_OUT_MAX];            /* pending reply bytes for the host        */
     u8 nout;                       /* number of pending reply bytes           */
+    u8 bell;                       /* BEL received; main drains this event    */
 } vtparse_t;
 
 /* Reset the parser to the GROUND state with empty buffers. */
@@ -39,5 +40,8 @@ void vt_init(vtparse_t *vt);
 /* Feed one byte from the host: advances the state machine, mutating the screen
  * grid and/or appending reply bytes to vt->out. */
 void vt_feed(vtparse_t *vt, screen_t *s, u8 byte);
+
+/* Return and clear the pending BEL event flag. */
+u8 vt_take_bell(vtparse_t *vt);
 
 #endif /* VTPARSE_H */

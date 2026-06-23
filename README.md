@@ -53,11 +53,35 @@ build/term.tap
 build/term.map
 ```
 
+The startup screen shows the program version, UTC build time, and git commit
+short hash. Override them when needed:
+
+```sh
+make tap VERSION=0.1.0 BUILD_DATE=2026-06-23T12:00:00Z GIT_COMMIT=abcdef123456
+```
+
 For Interface 1 RS-232 hardware:
 
 ```sh
 make if1
 ```
+
+For release-style artifacts with versioned filenames:
+
+```sh
+make release-build VERSION=0.1.0
+```
+
+This creates:
+
+```text
+dist/timex-vt100-emulator-0.1.0.tap
+dist/timex-vt100-emulator-0.1.0-if1.tap
+```
+
+GitHub releases are built from tags named `v*`, for example `v0.1.0`. The
+release workflow uses the official `z88dk/z88dk:latest` Docker image and
+uploads a zip containing both TAP files.
 
 Install the optional local terminfo entry:
 
@@ -222,10 +246,16 @@ python3 tools/zesarux_stdio_bridge.py --map build/term.map --raw
 - `ENTER` sends CR (`0x0D`).
 - `CAPS+0` sends Backspace / Ctrl-H (`0x08`).
 - `SYMBOL+0` sends underscore (`_`).
+- `CAPS+SYMBOL` held together acts as Control.
+- `CAPS+SYMBOL+letter` sends Ctrl-letter, for example `CAPS+SYMBOL+G`
+  sends Ctrl-G / BEL (`0x07`).
 - `CAPS+SYMBOL+5/6/7/8` sends cursor left/down/up/right.
 - `SYMBOL+SPACE` sends ESC.
+- `CAPS+SYMBOL+1` also sends ESC as a deliberate control chord.
 
 Backspace is destructive on screen, so `asdf^H^H^H^H123` renders as `123`.
+BEL rings the Timex beeper. Send it with `CAPS+SYMBOL+G` from the keyboard or
+as byte `0x07` from the host side.
 
 ## Interface 1 RS-232 Hardware
 
@@ -282,7 +312,7 @@ hi-res display.
 
 Supported receive-side behavior includes:
 
-- C0 controls: BEL ignored, BS destructive, HT, LF/VT/FF, CR, SO/SI.
+- C0 controls: BEL audible, BS destructive, HT, LF/VT/FF, CR, SO/SI.
 - ESC controls: IND, NEL, RI, HTS, DECSC/DECRC, RIS, DECALN.
 - DEC character sets: ASCII and DEC special graphics for box drawing.
 - CSI cursor controls: CUU/CUD/CUF/CUB, CNL/CPL, CHA/HPA, VPA, CUP/HVP.

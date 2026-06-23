@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release TAP binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compile TAP files with z88dk
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git_commit="${GITHUB_SHA::12}"
+          docker run --rm -v "$PWD":/src -w /src \
+            -e VERSION="$version" \
+            -e BUILD_DATE="$build_date" \
+            -e GIT_COMMIT="$git_commit" \
+            z88dk/z88dk:latest make release-build
+
+      - name: Package TAP files
+        run: |
+          set -eu
+          tap_files=(dist/*.tap)
+          test "${#tap_files[@]}" -eq 2
+          zip -j "dist/timex-vt100-emulator-${GITHUB_REF_NAME}-taps.zip" \
+            "${tap_files[@]}"
+          unzip -l "dist/timex-vt100-emulator-${GITHUB_REF_NAME}-taps.zip"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/*.zip \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/*.zip \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Timex VT100 Emulator ${GITHUB_REF_NAME}" \
+              --notes "Binary TAP files for Timex VT100 Emulator ${GITHUB_REF_NAME}." \
+              --verify-tag
+          fi

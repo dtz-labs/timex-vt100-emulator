@@ -87,10 +87,12 @@ static void test_c0_controls(void)
     vt_feed(&vt, &s, 0x09);
     CHECK(s.cx == COLS - 1);
 
-    /* BEL is ignored (no cursor / cell change) */
+    /* BEL raises an event but does not move the cursor or change cells. */
     screen_cup(&s, 3, 5);
     vt_feed(&vt, &s, 0x07);
     CHECK(s.cx == 5 && s.cy == 3);
+    CHECK(vt_take_bell(&vt) == 1);
+    CHECK(vt_take_bell(&vt) == 0);
 
     /* FF behaves like LF */
     screen_cup(&s, 3, 5);
@@ -132,6 +134,7 @@ static void test_esc_simple(void)
 
     /* RIS (ESC c) = hard reset: blank grid, home cursor, default modes/attr */
     feed(&vt, &s, "junk");
+    vt_feed(&vt, &s, 0x07);
     screen_cup(&s, 4, 4);
     screen_set_attr(&s, 7);
     feed(&vt, &s, "\x1b" "c");
@@ -139,6 +142,7 @@ static void test_esc_simple(void)
     CHECK(s.attr == 0);
     CHECK(s.cells[0][0].ch == BLANK_CH);
     CHECK(s.mode == (MODE_AUTOWRAP | MODE_CURSOR_VISIBLE));
+    CHECK(vt_take_bell(&vt) == 0);
 }
 
 static void test_csi_cursor_moves(void)

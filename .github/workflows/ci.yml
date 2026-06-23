@@ -27,3 +27,29 @@ jobs:
 
       - name: Run host-testable checks
         run: make ci
+
+  build-tap:
+    name: Build TAPs with z88dk
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compile TAP files with z88dk
+        run: |
+          set -eu
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git_commit="${GITHUB_SHA::12}"
+          docker run --rm -v "$PWD":/src -w /src \
+            -e VERSION=ci \
+            -e BUILD_DATE="$build_date" \
+            -e GIT_COMMIT="$git_commit" \
+            z88dk/z88dk:latest make release-build
+
+      - name: Upload TAP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: timex-vt100-emulator-taps
+          path: dist/*.tap
+          if-no-files-found: error

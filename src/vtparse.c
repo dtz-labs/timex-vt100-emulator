@@ -66,10 +66,18 @@ void vt_init(vtparse_t *vt)
     vt->g1 = 'B';
     vt->gl = 0;                    /* GL = G0 */
     vt->nout = 0;
+    vt->bell = 0;
     tabs_reset_defaults(vt);
     for (i = 0; i < VT_MAX_PARAMS; ++i) {
         vt->params[i] = 0;
     }
+}
+
+u8 vt_take_bell(vtparse_t *vt)
+{
+    u8 bell = vt->bell;
+    vt->bell = 0;
+    return bell;
 }
 
 /* Advance the cursor to the next horizontal tab stop, clamped to the last
@@ -123,6 +131,9 @@ static void ground_byte(vtparse_t *vt, screen_t *s, u8 b)
         return;
     }
     switch (b) {
+    case 0x07:                        /* BEL */
+        vt->bell = 1;
+        break;
     case 0x08:                        /* BS: destructive backspace */
         do_backspace(s);
         break;
@@ -146,7 +157,7 @@ static void ground_byte(vtparse_t *vt, screen_t *s, u8 b)
     case 0x0F:                        /* SI: select G0 into GL */
         vt->gl = 0;
         break;
-    default:                          /* BEL (0x07), DEL, other C0: ignore */
+    default:                          /* DEL, other C0: ignore */
         break;
     }
 }

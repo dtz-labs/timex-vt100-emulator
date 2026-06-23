@@ -18,6 +18,7 @@
 #include "conn.h"
 #include "keymap.h"
 #include "keybuf.h"
+#include "build_meta.h"
 #include <z80.h>
 #include <intrinsic.h>
 
@@ -30,7 +31,10 @@ static const u8 demo_stream[] =
     "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test          x\r\n"
     "mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj"
     "\x1b(B"
-    "\x1b[6;1H"
+    "\x1b[5;1H"
+    "Version v" APP_VERSION_STR "  " APP_GIT_COMMIT "\r\n"
+    "Built " APP_BUILD_DATE "\r\n"
+    "\r\n"
     "Bridge quick help:\r\n"
     "  macOS -> Timex: pipe text through bridge.\r\n"
     "  Timex -> macOS: type here; bridge writes stdout.\r\n"
@@ -47,6 +51,9 @@ static u8 irq_keybuf_tmp[KEYMAP_OUT_MAX];
 static u8 irq_nkeys;
 
 #define IO_BATCH_SIZE 32u
+
+static void beep_bell(void);
+static void beep_overrun(void);
 
 static void pump_vt_replies(vtparse_t *vt)
 {
@@ -87,6 +94,9 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
             }
             old_scroll_seq = scr->scroll_seq;
             vt_feed(vt, scr, buf[i]);
+            if (vt_take_bell(vt)) {
+                beep_bell();
+            }
             if (scr->scroll_seq != old_scroll_seq) {
                 if (render_scroll_region(scr, scr->last_scroll_top,
                                          scr->last_scroll_bot,
@@ -105,19 +115,29 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
     return changed;
 }
 
-static void beep_overrun(void)
+static void beep_tone(u8 cycles, u8 delay)
 {
     u8 i, j;
-    for (i = 0; i < 80u; ++i) {
+    for (i = 0; i < cycles; ++i) {
         z80_outp(0xFEu, 0x10u);
-        for (j = 0; j < 24u; ++j) {
+        for (j = 0; j < delay; ++j) {
             (void)z80_inp(0xFEu);
         }
         z80_outp(0xFEu, 0x00u);
-        for (j = 0; j < 24u; ++j) {
+        for (j = 0; j < delay; ++j) {
             (void)z80_inp(0xFEu);
         }
     }
+}
+
+static void beep_bell(void)
+{
+    beep_tone(60u, 36u);
+}
+
+static void beep_overrun(void)
+{
+    beep_tone(80u, 24u);
 }
 
 void keyboard_frame_tick(void)
