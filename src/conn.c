@@ -1,0 +1,341 @@
+/*
+ * conn.c -- split RX/TX byte-stream connection.
+ *
+ * Default backend: local loopback, used by host tests and ZEsarUX smoke tests.
+ * IF1 backend: ZX Interface 1 RS-232 ROM hooks, selected with
+ * -DCONN_BACKEND_IF1.
+ */
+#include "conn.h"
+
+#ifdef CONN_BACKEND_IF1
+#include <z80.h>
+
+#define RS_BAUD_50   0x00u
+#define RS_BAUD_75   0x01u
+#define RS_BAUD_110  0x02u
+#define RS_BAUD_134_5 0x03u
+#define RS_BAUD_150  0x04u
+#define RS_BAUD_300  0x05u
+#define RS_BAUD_600  0x06u
+#define RS_BAUD_1200 0x07u
+#define RS_BAUD_2400 0x08u
+#define RS_BAUD_4800 0x09u
+#define RS_BAUD_9600 0x0Au
+#define RS_BAUD_19200 0x0Bu
+#define RS_BAUD_38400 0x0Cu
+#define RS_PAR_NONE  0x00u
+#define RS_ERR_OK    0x00u
+#define RS_ERR_NO_DATA 0x04u
+
+#define IF1_BAUD_SYSVAR 0x5CC3u
+#define IF1_SER_FL      0x5CC7u
+#endif
+
+#ifndef CONN_POLL_TX_MAX
+#define CONN_POLL_TX_MAX 8u
+#endif
+
+#ifndef CONN_POLL_RX_MAX
+#define CONN_POLL_RX_MAX 2u
+#endif
+
+#ifdef CONN_BACKEND_IF1
+#ifndef CONN_IF1_BAUD
+#define CONN_IF1_BAUD RS_BAUD_9600
+#endif
+
+#if CONN_IF1_BAUD == RS_BAUD_50
+#define CONN_IF1_BAUD_DIVISOR 0x0A82u
+#elif CONN_IF1_BAUD == RS_BAUD_75
+#define CONN_IF1_BAUD_DIVISOR 0x0701u
+#elif CONN_IF1_BAUD == RS_BAUD_110
+#define CONN_IF1_BAUD_DIVISOR 0x04C5u
+#elif CONN_IF1_BAUD == RS_BAUD_134_5
+#define CONN_IF1_BAUD_DIVISOR 0x03E6u
+#elif CONN_IF1_BAUD == RS_BAUD_150
+#define CONN_IF1_BAUD_DIVISOR 0x037Fu
+#elif CONN_IF1_BAUD == RS_BAUD_300
+#define CONN_IF1_BAUD_DIVISOR 0x01BEu
+#elif CONN_IF1_BAUD == RS_BAUD_600
+#define CONN_IF1_BAUD_DIVISOR 0x00DEu
+#elif CONN_IF1_BAUD == RS_BAUD_1200
+#define CONN_IF1_BAUD_DIVISOR 0x006Eu
+#elif CONN_IF1_BAUD == RS_BAUD_2400
+#define CONN_IF1_BAUD_DIVISOR 0x0036u
+#elif CONN_IF1_BAUD == RS_BAUD_4800
+#define CONN_IF1_BAUD_DIVISOR 0x001Au
+#elif CONN_IF1_BAUD == RS_BAUD_9600
+#define CONN_IF1_BAUD_DIVISOR 0x000Cu
+#elif CONN_IF1_BAUD == RS_BAUD_19200
+#define CONN_IF1_BAUD_DIVISOR 0x0005u
+#elif CONN_IF1_BAUD == RS_BAUD_38400
+#define CONN_IF1_BAUD_DIVISOR 0x0002u
+#else
+#error "Unsupported CONN_IF1_BAUD"
+#endif
+#endif
+
+typedef struct {
+    u8 *buf;
+    u8 size;
+    u8 head;
+    u8 tail;
+    u8 used;
+} conn_ring_t;
+
+static u8 rx_buf[CONN_BUF_SIZE];
+static u8 tx_buf[CONN_BUF_SIZE];
+static conn_ring_t rx_ring = { rx_buf, CONN_BUF_SIZE, 0, 0, 0 };
+static conn_ring_t tx_ring = { tx_buf, CONN_BUF_SIZE, 0, 0, 0 };
+static u8 conn_flags;
+
+#ifdef CONN_BACKEND_IF1
+static u8 if1_ready;
+
+static u8 if1_create_sysvars(void) __naked
+{
+    __asm
+        rst     #0x08
+        defb    #0x31
+        ld      hl,#0x0000
+        ret
+    __endasm;
+}
+
+static u8 if1_rs232_get(u8 *byte) __z88dk_fastcall __naked
+{
+    (void)byte;
+    __asm
+        push    hl
+        rst     #0x08
+        defb    #0x1D
+        pop     de
+        ld      hl,#0x0004
+        ret     nc
+        ld      (de),a
+        ld      hl,#0x0000
+        ret
+    __endasm;
+}
+
+static u8 if1_rs232_put(u8 byte) __z88dk_fastcall __naked
+{
+    (void)byte;
+    __asm
+        ld      a,l
+        rst     #0x08
+        defb    #0x1E
+        ld      hl,#0x0000
+        ret
+    __endasm;
+}
+#endif
+
+static u8 next_index(const conn_ring_t *r, u8 i)
+{
+    ++i;
+    return (i == r->size) ? 0 : i;
+}
+
+static void ring_reset(conn_ring_t *r)
+{
+    r->head = 0;
+    r->tail = 0;
+    r->used = 0;
+}
+
+static u8 ring_space(const conn_ring_t *r)
+{
+    return (u8)(r->size - r->used);
+}
+
+static u8 ring_read(conn_ring_t *r, u8 *buf, u8 max)
+{
+    u8 n = 0;
+
+    while (n < max && r->used != 0) {
+        buf[n++] = r->buf[r->tail];
+        r->tail = next_index(r, r->tail);
+        --r->used;
+    }
+    return n;
+}
+
+static u8 ring_write(conn_ring_t *r, const u8 *buf, u8 n)
+{
+    u8 written = 0;
+
+    while (written < n && r->used < r->size) {
+        r->buf[r->head] = buf[written++];
+        r->head = next_index(r, r->head);
+        ++r->used;
+    }
+    return written;
+}
+
+static u8 ring_write_byte(conn_ring_t *r, u8 b)
+{
+    return ring_write(r, &b, 1);
+}
+
+static u8 ring_peek(const conn_ring_t *r)
+{
+    return r->buf[r->tail];
+}
+
+static void ring_drop_one(conn_ring_t *r)
+{
+    if (r->used != 0) {
+        r->tail = next_index(r, r->tail);
+        --r->used;
+    }
+}
+
+void conn_init(void)
+{
+    ring_reset(&rx_ring);
+    ring_reset(&tx_ring);
+    conn_flags = 0;
+
+#ifdef CONN_BACKEND_IF1
+    if1_ready = 0;
+    if (if1_create_sysvars() != RS_ERR_OK) {
+        conn_flags |= CONN_STATUS_INIT_ERROR;
+        return;
+    }
+    *((volatile u16 *)IF1_BAUD_SYSVAR) = CONN_IF1_BAUD_DIVISOR;
+    *((volatile u8 *)IF1_SER_FL) = 0;
+    if1_ready = 1;
+#endif
+}
+
+void conn_poll(void)
+{
+#ifdef CONN_BACKEND_IF1
+    u8 i;
+    u8 b;
+    u8 status;
+
+    if (!if1_ready) {
+        return;
+    }
+
+    for (i = 0; i < CONN_POLL_RX_MAX; ++i) {
+        if (ring_space(&rx_ring) == 0) {
+            conn_flags |= CONN_STATUS_RX_OVERFLOW;
+            break;
+        }
+        status = if1_rs232_get(&b);
+        if (status == RS_ERR_NO_DATA) {
+            break;
+        }
+        if (status != RS_ERR_OK) {
+            break;
+        }
+        ring_write_byte(&rx_ring, b);
+    }
+
+    for (i = 0; i < CONN_POLL_TX_MAX && tx_ring.used != 0; ++i) {
+        if ((z80_inp(0xEFu) & 0x08u) == 0) {
+            conn_flags |= CONN_STATUS_TX_BLOCKED;
+            break;
+        }
+        b = ring_peek(&tx_ring);
+        if (if1_rs232_put(b) != RS_ERR_OK) {
+            conn_flags |= CONN_STATUS_TX_BLOCKED;
+            break;
+        }
+        ring_drop_one(&tx_ring);
+    }
+#else
+    while (tx_ring.used != 0 && ring_space(&rx_ring) != 0) {
+        u8 b = ring_peek(&tx_ring);
+        ring_drop_one(&tx_ring);
+        ring_write_byte(&rx_ring, b);
+    }
+    if (tx_ring.used != 0 && ring_space(&rx_ring) == 0) {
+        conn_flags |= CONN_STATUS_RX_OVERFLOW;
+    }
+#endif
+}
+
+u8 conn_rx_count(void)
+{
+    return rx_ring.used;
+}
+
+u8 conn_rx_read(u8 *buf, u8 max)
+{
+    return ring_read(&rx_ring, buf, max);
+}
+
+u8 conn_tx_count(void)
+{
+    return tx_ring.used;
+}
+
+u8 conn_tx_space(void)
+{
+    return ring_space(&tx_ring);
+}
+
+u8 conn_tx_write(const u8 *buf, u8 n)
+{
+    return ring_write(&tx_ring, buf, n);
+}
+
+u8 conn_tx_write_byte(u8 b)
+{
+    return ring_write_byte(&tx_ring, b);
+}
+
+u8 conn_tx_write_text(const char *p)
+{
+    u8 written = 0;
+
+    while (*p != '\0') {
+        if (!conn_tx_write_byte((u8)(unsigned char)*p)) {
+            break;
+        }
+        ++p;
+        ++written;
+    }
+    return written;
+}
+
+u8 conn_status(void)
+{
+    return conn_flags;
+}
+
+u8 conn_take_status(void)
+{
+    u8 flags = conn_flags;
+    conn_flags = 0;
+    return flags;
+}
+
+u8 conn_space(void)
+{
+    return conn_tx_space();
+}
+
+u8 conn_read(u8 *buf, u8 max)
+{
+    return conn_rx_read(buf, max);
+}
+
+u8 conn_write(const u8 *buf, u8 n)
+{
+    return conn_tx_write(buf, n);
+}
+
+u8 conn_write_byte(u8 b)
+{
+    return conn_tx_write_byte(b);
+}
+
+u8 conn_write_text(const char *p)
+{
+    return conn_tx_write_text(p);
+}

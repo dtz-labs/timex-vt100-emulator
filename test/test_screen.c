@@ -357,6 +357,7 @@ static void test_modes_default_and_toggle(void)
     /* Sensible power-on default: autowrap on, cursor visible. */
     CHECK(s.mode & MODE_AUTOWRAP);
     CHECK(s.mode & MODE_CURSOR_VISIBLE);
+    CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
 
     screen_set_mode(&s, MODE_CURSOR_VISIBLE, 0);   /* DECTCEM reset: hide */
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
@@ -368,6 +369,11 @@ static void test_modes_default_and_toggle(void)
     screen_set_mode(&s, MODE_AUTOWRAP, 1);         /* DECAWM set */
     CHECK(s.mode & MODE_AUTOWRAP);
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));        /* still hidden */
+
+    screen_set_mode(&s, MODE_CURSOR_APPLICATION, 1); /* DECCKM set */
+    CHECK(s.mode & MODE_CURSOR_APPLICATION);
+    screen_set_mode(&s, MODE_CURSOR_APPLICATION, 0); /* DECCKM reset */
+    CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
 }
 
 static void test_putc_deferred_wrap(void)

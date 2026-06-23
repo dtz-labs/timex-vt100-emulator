@@ -288,6 +288,12 @@ static void test_csi_scroll_region_and_modes(void)
     feed(&vt, &s, "\x1b" "[?7h");
     CHECK(s.mode & MODE_AUTOWRAP);
 
+    /* DECCKM cursor-key application mode (ESC[?1h / ESC[?1l) */
+    feed(&vt, &s, "\x1b" "[?1h");
+    CHECK(s.mode & MODE_CURSOR_APPLICATION);
+    feed(&vt, &s, "\x1b" "[?1l");
+    CHECK(!(s.mode & MODE_CURSOR_APPLICATION));
+
     /* DECTCEM cursor hide / show (ESC[?25l / ESC[?25h) */
     feed(&vt, &s, "\x1b" "[?25l");
     CHECK(!(s.mode & MODE_CURSOR_VISIBLE));
@@ -342,6 +348,11 @@ static void test_csi_device_queries(void)
     /* secondary DA (ESC[>c) is not answered with the primary identity */
     vt.nout = 0;
     feed(&vt, &s, "\x1b" "[>c");
+    CHECK(vt.nout == 0);
+
+    /* A primary DA response coming back from a loopback is not a query. */
+    vt.nout = 0;
+    feed(&vt, &s, "\x1b" "[?1;0c");
     CHECK(vt.nout == 0);
 }
 

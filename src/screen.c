@@ -24,6 +24,10 @@ void screen_init(screen_t *s)
     s->saved_attr = 0;
     s->mode = MODE_AUTOWRAP | MODE_CURSOR_VISIBLE;  /* power-on default */
     s->wrap_pending = 0;
+    s->scroll_seq = 0;
+    s->last_scroll_top = 0;
+    s->last_scroll_bot = ROWS - 1;
+    s->last_scroll_n = 0;
 }
 
 void screen_putc(screen_t *s, u8 ch)
@@ -72,18 +76,30 @@ static void blank_row(screen_t *s, int r)
 /* Scroll an arbitrary inclusive row region [top..bot] by n (>0 up, <0 down),
  * blanking freed rows and dirtying the region. Shared by screen_scroll (the
  * whole scroll region) and IL/DL (a region starting at the cursor row). */
-static void scroll_region(screen_t *s, int top, int bot, int n)
+static s8 effective_scroll_n(int top, int bot, int n)
 {
     int height = bot - top + 1;
-    int absn, r, c;
+    int absn;
 
     if (n == 0 || height <= 0) {
-        return;
+        return 0;
     }
     absn = (n > 0) ? n : -n;
     if (absn > height) {
         absn = height;
     }
+    return (s8)((n > 0) ? absn : -absn);
+}
+
+static void scroll_region(screen_t *s, int top, int bot, int n)
+{
+    int absn, r, c;
+
+    n = effective_scroll_n(top, bot, n);
+    if (n == 0) {
+        return;
+    }
+    absn = (n > 0) ? n : -n;
 
     if (n > 0) {                       /* scroll up: content moves toward top */
         for (r = top; r <= bot - absn; ++r) {
@@ -112,7 +128,15 @@ static void scroll_region(screen_t *s, int top, int bot, int n)
 
 void screen_scroll(screen_t *s, s8 n)
 {
-    scroll_region(s, s->top, s->bot, n);
+    s8 actual = effective_scroll_n(s->top, s->bot, n);
+
+    scroll_region(s, s->top, s->bot, actual);
+    if (actual != 0) {
+        ++s->scroll_seq;
+        s->last_scroll_top = s->top;
+        s->last_scroll_bot = s->bot;
+        s->last_scroll_n = actual;
+    }
 }
 
 void screen_cr(screen_t *s)

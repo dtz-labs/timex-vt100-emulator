@@ -23,10 +23,10 @@
 #define ATTR_REVERSE   0x01u
 #define ATTR_UNDERLINE 0x02u
 
-/* Terminal mode bits (screen_t.mode). DECAWM autowrap (?7) and DECTCEM
- * cursor-visible (?25); vtparse maps the DEC private-mode numbers to these. */
-#define MODE_AUTOWRAP       0x01u
-#define MODE_CURSOR_VISIBLE 0x02u
+/* Terminal mode bits (screen_t.mode). vtparse maps DEC private modes here. */
+#define MODE_AUTOWRAP           0x01u  /* DECAWM ?7 */
+#define MODE_CURSOR_VISIBLE     0x02u  /* DECTCEM ?25 */
+#define MODE_CURSOR_APPLICATION 0x04u  /* DECCKM ?1 */
 
 #define BLANK_CH 0x20u   /* ASCII space: an "empty" cell */
 
@@ -44,6 +44,9 @@ typedef struct {
     u8 saved_cx, saved_cy, saved_attr;  /* DECSC/DECRC saved cursor + SGR */
     u8 mode;          /* MODE_* bits (autowrap, cursor-visible)           */
     u8 wrap_pending;  /* VT-100 deferred wrap: last column written, awaiting */
+    u8 scroll_seq;    /* increments when screen_scroll() moves the region    */
+    u8 last_scroll_top, last_scroll_bot;
+    s8 last_scroll_n;
 } screen_t;
 
 /* Reset to a blank screen: every cell a space with no attributes, cursor home,
@@ -126,8 +129,7 @@ void screen_save_cursor(screen_t *s);
 void screen_restore_cursor(screen_t *s);
 
 /* Set (on != 0) or clear (on == 0) the given MODE_* bit(s). vtparse calls this
- * for the SM/RM private modes it tracks: DECAWM (?7) -> MODE_AUTOWRAP,
- * DECTCEM (?25) -> MODE_CURSOR_VISIBLE. */
+ * for the SM/RM private modes it tracks. */
 void screen_set_mode(screen_t *s, u8 bits, u8 on);
 
 /* Set the scroll region to rows [top..bot] (0-based, inclusive) and home the

@@ -2,12 +2,12 @@ import socket, subprocess, time, re, os
 
 ZX = "/Applications/ZEsarUX.app/Contents/MacOS/zesarux"
 TAP = "/Users/mpasternak/Programowanie/tc-2068-vt100/build/term.tap"
-PORT = 10000
-PNG = "/tmp/smoke.png"
-if os.path.exists(PNG): os.remove(PNG)
+PORT = int(os.environ.get("ZRCP_PORT", "10001"))
+SCREENSHOT = "/tmp/smoke.pbm"
+if os.path.exists(SCREENSHOT): os.remove(SCREENSHOT)
 
 proc = subprocess.Popen(
-    [ZX, "--machine","TC2048","--tape",TAP,"--fastautoload",
+    [ZX, "--noconfigfile", "--machine","TC2048","--tape",TAP,"--fastautoload",
      "--vo","null","--ao","null","--nosplash",
      "--enable-remoteprotocol","--remoteprotocol-port",str(PORT),"--quickexit"],
     stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -32,34 +32,44 @@ def hexline(resp):
     return ""
 def rdbytes(s,addr,n):
     return bytes.fromhex(hexline(cmd(s,"read-memory %d %d"%(addr,n))))
-def glyph_addrs(col):
+def glyph_addrs(row, col):
     base = 0x6000 if (col&1) else 0x4000
     bx = col>>1
     out=[]
-    for prow in range(8):
+    for i in range(8):
+        prow = row * 8 + i
         off=((prow&0xC0)<<5)|((prow&0x07)<<8)|((prow&0x38)<<2)
         out.append(base+off+bx)
     return out
+def cell_bytes(s, row, col):
+    return bytes(rdbytes(s,a,1)[0] for a in glyph_addrs(row, col))
 
 try:
-    time.sleep(8)
+    time.sleep(float(os.environ.get("SMOKE_WAIT", "8")))
     s=socket.create_connection(("127.0.0.1",PORT),timeout=5)
     recv(s)
     print("help save-screen:", cmd(s,"help save-screen").strip()[:300])
     print()
     ok=True
-    for col,ch in ((0,ord('T')),(1,ord('C'))):
-        rom_addr = 0x3D00 + (ch-0x20)*8
-        rom = rdbytes(s, rom_addr, 8)
-        scr = bytes(rdbytes(s,a,1)[0] for a in glyph_addrs(col))
-        match = (rom==scr)
+    checks = (
+        ("upper-left l", 0, 0, bytes([0x00,0x00,0x00,0x1F,0x10,0x10,0x10,0x10])),
+        ("horizontal q", 0, 1, bytes([0x00,0x00,0x00,0xFF,0x00,0x00,0x00,0x00])),
+        ("upper-right k", 0, 26, bytes([0x00,0x00,0x00,0xF0,0x10,0x10,0x10,0x10])),
+        ("scroll top 2", 6, 7, bytes([0x70,0x88,0x08,0x30,0x40,0x80,0xF8,0x00])),
+        ("scroll top 3", 6, 8, bytes([0xF0,0x08,0x08,0x70,0x08,0x08,0xF0,0x00])),
+        ("scroll bottom 4", 23, 7, bytes([0x10,0x30,0x50,0x90,0xF8,0x10,0x10,0x00])),
+        ("scroll bottom 0", 23, 8, bytes([0x70,0x88,0x98,0xA8,0xC8,0x88,0x70,0x00])),
+    )
+    for name,row,col,want in checks:
+        scr = cell_bytes(s,row,col)
+        match = (scr==want)
         ok = ok and match
-        print("cell(col=%d,'%c') ROM@%04X=%s  SCREEN=%s  %s" %
-              (col,ch,rom_addr,rom.hex(),scr.hex(),"MATCH" if match else "MISMATCH"))
+        print("cell(row=%d,col=%d,%s) WANT=%s  SCREEN=%s  %s" %
+              (row,col,name,want.hex(),scr.hex(),"MATCH" if match else "MISMATCH"))
     print()
-    print("VERDICT:", "PASS - hires.c address math + glyph blit correct on TC2048" if ok else "FAIL")
+    print("VERDICT:", "PASS - line drawing + scroll rendered on TC2048" if ok else "FAIL")
     # screenshot artifact
-    print("save-screen:", cmd(s,"save-screen %s"%PNG).strip()[:200])
+    print("save-screen:", cmd(s,"save-screen %s"%SCREENSHOT).strip()[:200])
     s.close()
 finally:
     proc.terminate()
@@ -67,4 +77,4 @@ finally:
     except Exception: proc.kill()
 
 time.sleep(0.5)
-print("PNG exists:", os.path.exists(PNG), os.path.getsize(PNG) if os.path.exists(PNG) else "")
+print("screenshot exists:", os.path.exists(SCREENSHOT), os.path.getsize(SCREENSHOT) if os.path.exists(SCREENSHOT) else "")

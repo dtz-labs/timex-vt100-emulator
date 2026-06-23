@@ -2,5 +2,7 @@ build/
 *.o
 *.tap
 *.bin
+*.map
+__pycache__/
 .DS_Store
 *~

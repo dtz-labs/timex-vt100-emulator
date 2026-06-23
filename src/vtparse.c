@@ -188,7 +188,7 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
         }
         break;
     case 'c':                                                 /* DA */
-        if (vt->priv != '>') {              /* primary DA -> VT-100 identity */
+        if (vt->priv == 0 && param0(vt, 0) == 0) { /* primary DA request */
             emit(vt, 0x1B);
             emit(vt, '[');
             emit(vt, '?');
@@ -222,9 +222,10 @@ static void csi_dispatch(vtparse_t *vt, screen_t *s, u8 b)
             u8 i;
             for (i = 0; i < vt->nparams; ++i) {
                 switch (vt->params[i]) {
-                case 7:  screen_set_mode(s, MODE_AUTOWRAP, on);       break;  /* DECAWM */
-                case 25: screen_set_mode(s, MODE_CURSOR_VISIBLE, on); break;  /* DECTCEM */
-                default: break;             /* ?1 DECCKM realised in keymap; rest ignored */
+                case 1:  screen_set_mode(s, MODE_CURSOR_APPLICATION, on); break;  /* DECCKM */
+                case 7:  screen_set_mode(s, MODE_AUTOWRAP, on);           break;  /* DECAWM */
+                case 25: screen_set_mode(s, MODE_CURSOR_VISIBLE, on);     break;  /* DECTCEM */
+                default: break;
                 }
             }
         }
