@@ -81,7 +81,7 @@ dist/timex-vt100-emulator-0.1.0-if1.tap
 
 GitHub releases are built from tags named `v*`, for example `v0.1.0`. The
 release workflow uses the official `z88dk/z88dk:latest` Docker image and
-uploads a zip containing both TAP files.
+uploads both TAP files plus a zip containing them.
 
 Install the optional local terminfo entry:
 

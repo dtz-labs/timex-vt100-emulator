@@ -46,6 +46,7 @@ jobs:
             -e BUILD_DATE="$build_date" \
             -e GIT_COMMIT="$git_commit" \
             z88dk/z88dk:latest make release-build
+          sudo chown -R "$(id -u):$(id -g)" build dist
 
       - name: Upload TAP artifacts
         uses: actions/upload-artifact@v4
