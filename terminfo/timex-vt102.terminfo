@@ -1,6 +1,6 @@
-timex-vt102|tc2048-vt102|tc2068-vt102|Timex 2048/2068 64-column VT102 terminal emulator,
+timex-vt102|tc2048-vt102|tc2068-vt102|Timex 2048/2068 80-column VT102 terminal emulator,
 	am, msgr, xenl, xon,
-	cols#64, it#8, lines#24,
+	cols#80, it#8, lines#24,
 	acsc=``aaffggjjkkllmmnnooppqqrrssttuuvvwwxxyyzz{{||}}~~,
 	bel=^G,
 	clear=\E[H\E[J,
