@@ -179,13 +179,17 @@ run-tc2068: run
 run-ts2068: TIMEX_MACHINE = TS2068
 run-ts2068: run
 
+BUILD_DATE_H := $(BUILD_DIR)/build_date.h
+
 $(TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(SOURCES) -o "$(APP)" -create-app $(Z88DK_LDFLAGS)
 
 $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(IF1_TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(IF1_DEFS) $(SOURCES) -o "$(IF1_APP)" -create-app $(Z88DK_LDFLAGS)
 
@@ -194,14 +198,19 @@ $(BUILD_DIR):
 
 FORCE:
 
+# APP_BUILD_DATE is deliberately absent here: a timestamp in this cmp-guarded
+# header would change on every make run and force a full zcc rebuild. The tap
+# recipes write it to build_date.h right before compiling, so only real
+# rebuilds get a fresh stamp. (zcc cannot pass string macros via -D; it strips
+# the inner quotes.)
 $(BUILD_META): FORCE | $(BUILD_DIR)
 	@tmp="$@.tmp"; \
 	{ \
 		echo "#ifndef BUILD_META_H"; \
 		echo "#define BUILD_META_H"; \
 		echo "#define APP_VERSION_STR \"$(VERSION)\""; \
-		echo "#define APP_BUILD_DATE \"$(BUILD_DATE)\""; \
 		echo "#define APP_GIT_COMMIT \"$(GIT_COMMIT)\""; \
+		echo "#include \"build_date.h\""; \
 		echo "#endif /* BUILD_META_H */"; \
 	} > "$$tmp"; \
 	if test -f "$@" && cmp -s "$$tmp" "$@"; then rm "$$tmp"; else mv "$$tmp" "$@"; fi
@@ -277,6 +286,6 @@ print-vars:
 clean:
 	rm -rf "$(BUILD_DIR)/host"
 	rm -rf "$(DIST_DIR)"
-	rm -f "$(BUILD_META)" "$(BUILD_META).tmp"
+	rm -f "$(BUILD_META)" "$(BUILD_META).tmp" "$(BUILD_DATE_H)"
 	rm -f "$(APP)" "$(TAP)" "$(APP).map" "$(APP)_CODE.bin"
 	rm -f "$(IF1_APP)" "$(IF1_TAP)" "$(IF1_APP).map" "$(IF1_APP)_CODE.bin"

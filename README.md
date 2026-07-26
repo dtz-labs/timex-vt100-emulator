@@ -13,6 +13,11 @@ Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/zx-vt102-
 VT102-style terminal for Timex 2048/2068-class machines using Timex hi-res
 512x192 video for an 80x24 text display.
 
+![Rogue played over the Timex VT102 terminal in ZEsarUX](docs/rogue.png)
+
+Above: the original Rogue running on a Unix host, played through the Timex
+terminal in ZEsarUX.
+
 A second target for the stock ZX Spectrum — 40x24 on ULA graphics with the same
 6-px font, built from the same source tree — is **designed but not yet
 implemented**; see
