@@ -1,0 +1,84 @@
+name: pages
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  # bump to move to a newer emulator build
+  JSSPECCY_RELEASE: v3.2.0-timex.1
+
+jobs:
+  deploy:
+    name: deploy browser terminal
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pattern as release.yml: z88dk runs in a container, but the job
+      # itself stays on the runner so gh, unzip and the Pages actions are all
+      # still available.
+      - name: Build the TAP with z88dk
+        run: |
+          set -eu
+          docker run --rm -v "$PWD":/src -w /src \
+            -e BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -e GIT_COMMIT="${GITHUB_SHA::12}" \
+            z88dk/z88dk:latest make tap
+
+      # Stock JSSpeccy 3 has no Timex machines, so the hi-res display has
+      # nowhere to run in a browser; this pulls a tagged build of the fork
+      # that adds them.
+      - name: Fetch the emulator build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p _emulator
+          gh release download "$JSSPECCY_RELEASE" \
+            --repo dtz-labs/jsspeccy3 \
+            --pattern jsspeccy-dist.zip \
+            --output _emulator/jsspeccy-dist.zip
+          unzip -q _emulator/jsspeccy-dist.zip -d _emulator/dist
+
+      - name: Assemble the site
+        run: |
+          set -eu
+          mkdir -p _site
+          cp -R site/. _site/
+          cp -R _emulator/dist/jsspeccy _site/jsspeccy
+          cp build/term.tap _site/term.tap
+
+      - name: Check the pieces the page needs are all there
+        run: |
+          set -eu
+          test -f _site/index.html
+          test -f _site/term.tap
+          test -f _site/jsspeccy/jsspeccy.js
+          test -f _site/jsspeccy/jsspeccy-worker.js
+          test -f _site/jsspeccy/jsspeccy-core.wasm
+          test -f _site/jsspeccy/roms/tc2048.rom
+          test -f _site/jsspeccy/tapeloaders/tape_2048.szx
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

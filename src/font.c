@@ -6,7 +6,8 @@
 #include "font.h"
 
 /* Generated glyph data. */
-#include "font_data.h"
+#include "font_ascii_data.h"
+#include "font_graph_data.h"
 
 /* Blank glyph for invalid codes and space. */
 static const u8 blank_glyph[8] = {

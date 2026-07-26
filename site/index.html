@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timex VT102 Terminal — run it in the browser</title>
+<style>
+  body {
+    background: #101010;
+    color: #d8d8d8;
+    font-family: "Courier New", monospace;
+    margin: 0;
+    padding: 1.5rem 1rem 3rem;
+    text-align: center;
+  }
+  h1 { color: #ffff55; font-size: 1.5rem; margin: 0 0 0.25rem; }
+  p  { margin: 0.4rem auto; max-width: 46rem; line-height: 1.45; }
+  a  { color: #55ffff; }
+  #jsspeccy {
+    margin: 1.25rem auto;
+    display: flex;
+    justify-content: center;
+  }
+  .keys { color: #55ff55; }
+  .hint { color: #ffff55; }
+  .footer { margin-top: 1.5rem; font-size: 0.85rem; color: #909090; }
+</style>
+</head>
+<body>
+<h1>TIMEX VT102 TERMINAL</h1>
+<p>A VT102 terminal for Timex 2048/2068-class machines, in
+<strong>80&times;24</strong> monochrome text on Timex hi-res 512&times;192 video,
+with the 6&times;8 font from the Timex Terminal TT3000 ROM. This page always runs
+the latest TAP built from
+<a href="https://github.com/dtz-labs/timex-vt100-emulator">master</a> on an
+emulated <strong>Timex TC2048</strong>.
+<span class="hint">Press the &#9654; button on the display to start.</span></p>
+<p>There is no host at the other end here, so the terminal runs in loopback: what
+you type goes through the keyboard mapping, out to the connection layer, back in,
+and through the VT parser onto the screen. That exercises the real path &mdash;
+it is a working terminal talking to itself. Attaching it to a shell over a
+WebSocket is
+<a href="https://github.com/dtz-labs/timex-vt100-emulator/issues/1">issue&nbsp;1</a>.</p>
+<p class="keys">ENTER — CR &nbsp; CAPS+0 — backspace &nbsp; SYMBOL+SPACE — ESC
+&nbsp; CAPS+SYMBOL+letter — Ctrl-letter</p>
+<div id="jsspeccy"></div>
+<p>Timex video needs our <a href="https://github.com/dtz-labs/jsspeccy3">fork of
+JSSpeccy&nbsp;3</a>, which adds the TC2048 and TC2068; stock JSSpeccy has no
+Timex video modes. TAPs are also in the
+<a href="https://github.com/dtz-labs/timex-vt100-emulator/releases">releases</a>.</p>
+<p class="footer">Emulation by
+<a href="https://github.com/gasman/jsspeccy3">JSSpeccy&nbsp;3</a> (GPL-3), in the
+<a href="https://github.com/dtz-labs/jsspeccy3">dtz-labs fork</a> with Timex support.</p>
+<script src="jsspeccy/jsspeccy.js"></script>
+<script>
+JSSpeccy(document.getElementById('jsspeccy'), {
+    machine: 2048,
+    openUrl: 'term.tap',
+    autoLoadTapes: true,
+    // No autoStart: JSSpeccy builds its AudioContext inside start() and never
+    // calls resume(), so starting from the visible play button keeps it inside
+    // a user gesture -- the only way browsers allow audio (the terminal's BEL).
+    zoom: 2
+});
+</script>
+</body>
+</html>

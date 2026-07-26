@@ -516,7 +516,7 @@ def main(argv=None):
     parser.add_argument("--drain-after-eof", type=float, default=2.0)
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK)
     parser.add_argument("--mailbox-size", type=int, default=32)
-    parser.add_argument("--cols", type=int, default=64)
+    parser.add_argument("--cols", type=int, default=80)
     parser.add_argument("--rows", type=int, default=24)
     parser.add_argument("--term", default="vt100")
     parser.add_argument(

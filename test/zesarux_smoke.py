@@ -70,19 +70,41 @@ def rdbytes(s, addr, n):
     return bytes.fromhex(hexline(cmd(s, "read-memory %d %d" % (addr, n))))
 
 
-def glyph_addrs(row, col):
-    base = 0x6000 if (col & 1) else 0x4000
-    bx = col >> 1
-    out = []
-    for i in range(8):
-        prow = row * 8 + i
-        off = ((prow & 0xC0) << 5) | ((prow & 0x07) << 8) | ((prow & 0x38) << 2)
-        out.append(base + off + bx)
-    return out
+LEFT_MARGIN_PX = 16
+CELL_PX = 6
+
+
+def cell_span(col):
+    """Where cell `col` lives in a scanline: byte index, shift, and bit masks.
+
+    Mirrors render_cell_span() in src/render.c. At 6 px a cell no longer owns a
+    whole byte, so reading one back means masking it out of one or two bytes.
+    """
+    px = LEFT_MARGIN_PX + CELL_PX * col
+    sh = px & 7
+    mask0 = 0xFC >> sh
+    mask1 = (0xFC << (8 - sh)) & 0xFF if sh > 2 else 0
+    return px >> 3, sh, mask0, mask1
+
+
+def byte_addr(byte_idx, prow):
+    """Address of scanline byte `byte_idx` (0..63) on pixel row `prow`."""
+    base = 0x6000 if (byte_idx & 1) else 0x4000
+    off = ((prow & 0xC0) << 5) | ((prow & 0x07) << 8) | ((prow & 0x38) << 2)
+    return base + off + (byte_idx >> 1)
 
 
 def cell_bytes(s, row, col):
-    return bytes(rdbytes(s, a, 1)[0] for a in glyph_addrs(row, col))
+    """Read one cell's 8 glyph rows back, re-aligned into bits 7..2."""
+    byte_idx, sh, mask0, mask1 = cell_span(col)
+    out = []
+    for i in range(8):
+        prow = row * 8 + i
+        g = ((rdbytes(s, byte_addr(byte_idx, prow), 1)[0] & mask0) << sh) & 0xFF
+        if mask1:
+            g |= (rdbytes(s, byte_addr(byte_idx + 1, prow), 1)[0] & mask1) >> (8 - sh)
+        out.append(g)
+    return bytes(out)
 
 
 try:
@@ -93,22 +115,22 @@ try:
     print()
     ok = True
     checks = (
-        ("upper-left l", 0, 0, bytes([0x00, 0x00, 0x00, 0x1F, 0x10, 0x10, 0x10, 0x10])),
-        ("horizontal q", 0, 1, bytes([0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00])),
+        ("upper-left l", 0, 0, bytes([0x00, 0x00, 0x00, 0x3C, 0x20, 0x20, 0x20, 0x20])),
+        ("horizontal q", 0, 1, bytes([0x00, 0x00, 0x00, 0xFC, 0x00, 0x00, 0x00, 0x00])),
         (
             "upper-right k",
             0,
-            36,
-            bytes([0x00, 0x00, 0x00, 0xF0, 0x10, 0x10, 0x10, 0x10]),
+            79,
+            bytes([0x00, 0x00, 0x00, 0xE0, 0x20, 0x20, 0x20, 0x20]),
         ),
-        ("help B", 7, 0, bytes([0xF0, 0x88, 0x88, 0xF0, 0x88, 0x88, 0xF0, 0x00])),
+        ("help B", 7, 0, bytes([0x00, 0xF0, 0x88, 0xF0, 0x88, 0x88, 0xF0, 0x00])),
         (
             "help ENTER E",
             12,
             2,
-            bytes([0xF8, 0x80, 0x80, 0xF0, 0x80, 0x80, 0xF8, 0x00]),
+            bytes([0x00, 0xF8, 0x80, 0xF0, 0x80, 0x80, 0xF8, 0x00]),
         ),
-        ("ready R", 15, 0, bytes([0xF0, 0x88, 0x88, 0xF0, 0xA0, 0x90, 0x88, 0x00])),
+        ("ready R", 15, 0, bytes([0x00, 0xF0, 0x88, 0x88, 0xF0, 0x90, 0x88, 0x00])),
     )
     for name, row, col, want in checks:
         scr = cell_bytes(s, row, col)

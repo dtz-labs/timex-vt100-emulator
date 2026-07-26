@@ -9,86 +9,116 @@
 #include <stdint.h>
 #include <string.h>
 
+/* PURE: one glyph byte for one scanline, with attributes applied to the cell. */
+static u8 glyph_row_byte(const u8 *glyph, u8 attr, u8 scanline)
+{
+    u8 g = glyph[scanline];
+
+    if (attr & ATTR_REVERSE) {
+        /* Invert only the six pixels this cell owns. */
+        g = (u8)(~g & 0xFCu);
+    }
+    if ((attr & ATTR_UNDERLINE) && scanline == 7u) {
+        g = 0xFCu;
+    }
+    return g;
+}
+
 /* PURE: produce 8 pixel rows for one cell. */
 void render_cell_bytes(u8 ch, u8 attr, u8 out[8])
 {
     const u8 *glyph = font_glyph(ch);
     u8 i;
 
-    /* Copy glyph bytes. */
     for (i = 0; i < 8; ++i) {
-        out[i] = glyph[i];
-    }
-
-    /* Apply REVERSE: invert all rows. */
-    if (attr & ATTR_REVERSE) {
-        for (i = 0; i < 8; ++i) {
-            out[i] = ~out[i];
-        }
-    }
-
-    /* Apply UNDERLINE: set bottom row to full ink. */
-    if (attr & ATTR_UNDERLINE) {
-        out[7] = 0xFF;
+        out[i] = glyph_row_byte(glyph, attr, i);
     }
 }
 
-/* Hardware: blit dirty rows to display. */
-static void render_cell_to(u8 *dst[8], u8 bx, u8 ch, u8 attr)
+/* PURE: 4 cells (24 px) pack into 3 bytes with constant shifts. */
+void render_pack4(const u8 *g, u8 *out3)
 {
-    const u8 *glyph = font_glyph(ch);
+    out3[0] = (u8)((g[0] & 0xFCu) | (g[1] >> 6));
+    out3[1] = (u8)(((g[1] << 2) & 0xF0u) | (g[2] >> 4));
+    out3[2] = (u8)(((g[2] << 4) & 0xC0u) | (g[3] >> 2));
+}
 
-    if (attr == 0) {
-        dst[0][bx] = glyph[0];
-        dst[1][bx] = glyph[1];
-        dst[2][bx] = glyph[2];
-        dst[3][bx] = glyph[3];
-        dst[4][bx] = glyph[4];
-        dst[5][bx] = glyph[5];
-        dst[6][bx] = glyph[6];
-        dst[7][bx] = glyph[7];
-    } else {
-        u8 b0 = glyph[0];
-        u8 b1 = glyph[1];
-        u8 b2 = glyph[2];
-        u8 b3 = glyph[3];
-        u8 b4 = glyph[4];
-        u8 b5 = glyph[5];
-        u8 b6 = glyph[6];
-        u8 b7 = glyph[7];
+/* PURE: locate one cell inside a scanline. */
+void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
+{
+    u16 px = (u16)(RENDER_LEFT_MARGIN_PX + RENDER_CELL_PX * (u16)col);
+    u8 s = (u8)(px & 7u);
 
-        if (attr & ATTR_REVERSE) {
-            b0 = ~b0;
-            b1 = ~b1;
-            b2 = ~b2;
-            b3 = ~b3;
-            b4 = ~b4;
-            b5 = ~b5;
-            b6 = ~b6;
-            b7 = ~b7;
-        }
-        if (attr & ATTR_UNDERLINE) {
-            b7 = 0xFFu;
-        }
+    *byte_idx = (u8)(px >> 3);
+    *sh = s;
+    *mask0 = (u8)(0xFCu >> s);
+    *mask1 = (s > 2u) ? (u8)((0xFCu << (8u - s)) & 0xFFu) : 0u;
+}
 
-        dst[0][bx] = b0;
-        dst[1][bx] = b1;
-        dst[2][bx] = b2;
-        dst[3][bx] = b3;
-        dst[4][bx] = b4;
-        dst[5][bx] = b5;
-        dst[6][bx] = b6;
-        dst[7][bx] = b7;
+/*
+ * PURE: pack one full scanline into the two 32-byte display-file rows that
+ * hold it.
+ *
+ * Cells are walked in groups of eight because eight cells span six bytes,
+ * which is three CONSECUTIVE indices in each display file -- so both files
+ * are written sequentially with no parity test in the loop.
+ *
+ * g80: COLS attribute-applied glyph bytes for one scanline (cell in bits
+ *      7..2), left to right.
+ * ev, od: the 32-byte destination rows for the even (file0) and odd (file1)
+ *         display files; margin indices 0 and 31 are left untouched.
+ */
+void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
+{
+    u8 j;
+
+    for (j = 0; j < 10u; ++j) {
+        u8 base = (u8)(j * 8u);   /* first cell of this group          */
+        u8 fi = (u8)(1u + j * 3u); /* first file index of this group    */
+        u8 packed[3];
+
+        /* Scanline bytes 2+6j .. 4+6j. */
+        render_pack4(&g80[base], packed);
+        ev[fi] = packed[0];
+        od[fi] = packed[1];
+        ev[fi + 1u] = packed[2];
+
+        /* Scanline bytes 5+6j .. 7+6j. */
+        render_pack4(&g80[base + 4u], packed);
+        od[fi + 1u] = packed[0];
+        ev[fi + 2u] = packed[1];
+        od[fi + 2u] = packed[2];
     }
 }
+
+/*
+ * Blit one text row.
+ *
+ * Glyph lookup is hoisted out of the scanline loop on purpose: doing it inside
+ * would cost 640 lookups per row instead of 80.
+ *
+ * row_glyphs/row_attrs are file-scope, not locals, to keep 240 bytes (80
+ * pointers + 80 attribute bytes) off the Z80 stack. That is safe because
+ * render_flush -- the only caller of render_row_fast -- runs from the main
+ * loop only; it is never reached from the IM2 keyboard handler
+ * (keyboard_im2_isr -> keyboard_frame_tick reaches only keymap_poll and
+ * keybuf_write), so there is no reentrancy hazard in sharing this storage.
+ */
+static const u8 *row_glyphs[COLS];
+static u8 row_attrs[COLS];
 
 static void render_row_fast(const screen_t *s, u8 r)
 {
     u8 *even_dst[8];
     u8 *odd_dst[8];
-    cell_t *cell = (cell_t *)&s->cells[r][0];
-    u8 bx;
-    u8 i;
+    const cell_t *cell = &s->cells[r][0];
+    u8 col, i;
+
+    for (col = 0; col < COLS; ++col) {
+        row_glyphs[col] = font_glyph(cell->ch);
+        row_attrs[col] = cell->attr;
+        ++cell;
+    }
 
     for (i = 0; i < 8u; ++i) {
         u8 prow = (u8)((r << 3) + i);
@@ -99,11 +129,13 @@ static void render_row_fast(const screen_t *s, u8 r)
         odd_dst[i] = (u8 *)(uintptr_t)(HIRES_FILE1 + off);
     }
 
-    for (bx = 0; bx < 32u; ++bx) {
-        render_cell_to(even_dst, bx, cell->ch, cell->attr);
-        ++cell;
-        render_cell_to(odd_dst, bx, cell->ch, cell->attr);
-        ++cell;
+    for (i = 0; i < 8u; ++i) {
+        u8 g[COLS];
+
+        for (col = 0; col < COLS; ++col) {
+            g[col] = glyph_row_byte(row_glyphs[col], row_attrs[col], i);
+        }
+        render_row_bytes(g, even_dst[i], odd_dst[i]);
     }
 }
 
@@ -186,27 +218,27 @@ u8 render_scroll_region(screen_t *s, u8 top, u8 bot, s8 n)
     return 1;
 }
 
-/* Hardware: render cursor at current position. */
+/* Hardware: invert the six pixels of the cursor cell, in place. */
 void render_cursor(const screen_t *s)
 {
-    u8 cx = s->cx;
-    u8 cy = s->cy;
+    u8 byte_idx, sh, mask0, mask1;
     u8 i;
-    u8 ch = s->cells[cy][cx].ch;
-    u8 attr = s->cells[cy][cx].attr;
-    u8 cell_bytes[8];
 
-    /* Only draw if cursor is visible. */
     if (!(s->mode & MODE_CURSOR_VISIBLE)) {
         return;
     }
 
-    /* Get current cell bytes. */
-    render_cell_bytes(ch, attr, cell_bytes);
+    /* The masks alone describe what to invert; the shift is not needed here. */
+    render_cell_span(s->cx, &byte_idx, &sh, &mask0, &mask1);
 
-    /* Invert the cell to show cursor. */
-    for (i = 0; i < 8; ++i) {
-        u16 addr = hires_addr(cx, (u8)(cy * 8 + i));
-        *(u8 *)(uintptr_t)addr = ~cell_bytes[i];
+    for (i = 0; i < 8u; ++i) {
+        u8 prow = (u8)(s->cy * 8u + i);
+        u8 *p = (u8 *)(uintptr_t)hires_addr(byte_idx, prow);
+
+        *p ^= mask0;
+        if (mask1 != 0) {
+            u8 *q = (u8 *)(uintptr_t)hires_addr((u8)(byte_idx + 1u), prow);
+            *q ^= mask1;
+        }
     }
 }

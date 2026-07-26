@@ -3,7 +3,7 @@
 Bridge a ZX Interface 1 RS-232 serial port to a local pseudo-terminal.
 
 The Timex side speaks raw VT102-ish bytes. This program opens a serial device,
-spawns a local shell/editor side in a PTY, sets the terminal to 64x24, and copies
+spawns a local shell/editor side in a PTY, sets the terminal to 80x24, and copies
 bytes in both directions.
 """
 
@@ -32,11 +32,11 @@ BAUDS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Bridge ZX Interface 1 RS-232 to a local 64x24 VT102 PTY."
+        description="Bridge ZX Interface 1 RS-232 to a local 80x24 VT102 PTY."
     )
     parser.add_argument("serial", help="serial device, e.g. /dev/cu.usbserial-0001")
     parser.add_argument("--baud", type=int, default=9600, choices=sorted(BAUDS))
-    parser.add_argument("--cols", type=int, default=64)
+    parser.add_argument("--cols", type=int, default=80)
     parser.add_argument("--rows", type=int, default=24)
     parser.add_argument("--term", default="vt100")
     parser.add_argument(

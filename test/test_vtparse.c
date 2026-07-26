@@ -83,7 +83,7 @@ static void test_c0_controls(void)
     screen_cup(&s, 2, 8);
     vt_feed(&vt, &s, 0x09);
     CHECK(s.cx == 16);
-    screen_cup(&s, 2, 60);
+    screen_cup(&s, 2, COLS - 4);
     vt_feed(&vt, &s, 0x09);
     CHECK(s.cx == COLS - 1);
 

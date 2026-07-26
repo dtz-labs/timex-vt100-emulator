@@ -1,7 +1,7 @@
 /*
  * screen.h -- the terminal cell-grid model (pure logic, host-tested).
  *
- * A 64x24 grid of character cells with a cursor, a scroll region, the current
+ * An 80x24 grid of character cells with a cursor, a scroll region, the current
  * SGR attribute, and per-row dirty flags. The VT-100 parser (vtparse) drives
  * this model; the hi-res renderer (render) blits the dirty rows. This module
  * knows nothing about hardware, escape sequences, or pixels -- it is the single
@@ -15,7 +15,7 @@
 
 #include "types.h"
 
-#define COLS 64u
+#define COLS 80u
 #define ROWS 24u
 
 /* Cell attribute bits (monochrome hi-res: colour is global, so attrs are the
