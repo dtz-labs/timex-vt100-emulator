@@ -201,6 +201,24 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1);
 expected to be a problem, but **to confirm against `build/term.map`** during
 implementation rather than assumed.
 
+### 7.1 Browser live demo
+
+Added to scope after the design was approved, at the project owner's request, and
+modelled on the working setup in the sibling `attribute-raid` repository.
+
+A `site/index.html` embeds the `dtz-labs/jsspeccy3` fork — which adds the Timex
+machines stock JSSpeccy 3 lacks — and a `pages.yml` workflow deploys it with the
+current `term.tap` on every push to `master`. The README gains a link.
+
+This is a **demo, not the transport of issue #1**. No host sits behind the page.
+It is still live rather than a screenshot because the default `conn` backend
+loops TX into RX (`src/conn.c:359`), so keys typed on the emulated keyboard travel
+the real keyboard → `conn` → VT parser → renderer path and appear on screen. That
+makes it a genuine exercise of the 80-column renderer, which is the point.
+
+No C changes. The demo is the reason the 80-column work becomes visible to anyone
+without a Timex or an emulator install.
+
 ---
 
 ## 8. Risk: render throughput
@@ -270,7 +288,8 @@ glyphs at 6-px pitch is a complete substitute, needing only a redraw of `%`.
 - Optimising the renderer (D16).
 - 64-column mode in any form.
 - Colour, double-width/double-height, smooth scroll.
-- The browser/JSSpeccy transport — tracked separately as issue #1.
+- Connecting the browser demo to a real host over a WebSocket — the demo page
+  itself is in scope (§7.1), the transport behind it is issue #1.
 
 ---
 
@@ -283,4 +302,5 @@ glyphs at 6-px pitch is a complete substitute, needing only a redraw of `%`.
    is known to be in the blit path rather than the arithmetic.
 4. Flip `COLS` to 80, rewrite `render_flush()` and `render_cursor()`, fix the tests.
 5. terminfo, bridges, demo stream, README.
-6. ZEsarUX verification and new screenshots.
+6. Browser live demo: `site/index.html`, `pages.yml`, README link (§7.1).
+7. ZEsarUX verification, smoke-test rewrite, and new screenshots.
