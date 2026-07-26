@@ -69,6 +69,7 @@ jobs:
           test -f _site/index.html
           test -f _site/term.tap
           test -f _site/jsspeccy/jsspeccy.js
+          test -f _site/jsspeccy/jsspeccy-worker.js
           test -f _site/jsspeccy/jsspeccy-core.wasm
           test -f _site/jsspeccy/roms/tc2048.rom
           test -f _site/jsspeccy/tapeloaders/tape_2048.szx
