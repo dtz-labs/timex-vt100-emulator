@@ -40,7 +40,7 @@ static void test_render_cell_reverse(void)
     render_cell_bytes('A', ATTR_REVERSE, rev);
 
     for (i = 0; i < 8u; ++i) {
-        CHECK(rev[i] == (u8)~plain[i]);
+        CHECK(rev[i] == (u8)(~plain[i] & 0xFCu));
     }
 }
 
@@ -57,7 +57,7 @@ static void test_render_cell_underline(void)
     for (i = 0; i < 7u; ++i) {
         CHECK(ul[i] == plain[i]);
     }
-    CHECK(ul[7] == 0xFF);
+    CHECK(ul[7] == 0xFC);
 }
 
 /* REVERSE + UNDERLINE: underline wins on the bottom row. */
@@ -71,9 +71,9 @@ static void test_render_cell_reverse_underline(void)
     render_cell_bytes('A', (u8)(ATTR_REVERSE | ATTR_UNDERLINE), both);
 
     for (i = 0; i < 7u; ++i) {
-        CHECK(both[i] == (u8)~plain[i]);
+        CHECK(both[i] == (u8)(~plain[i] & 0xFCu));
     }
-    CHECK(both[7] == 0xFF);
+    CHECK(both[7] == 0xFC);
 }
 
 /* DEC graphics: 0xF1 (0x71 | 0x80, q) maps to a horizontal line. */
@@ -181,6 +181,92 @@ static void test_cell_span_covers_six_pixels(void)
     }
 }
 
+/*
+ * Reference painter: plot each cell's six pixels one at a time into a 64-byte
+ * scanline. Slow and obviously correct; the packer must agree with it.
+ */
+static void paint_reference(const u8 *glyph_row, u8 ncols, u8 line[64])
+{
+    u8 col, k, i;
+
+    for (i = 0; i < 64u; ++i) {
+        line[i] = 0;
+    }
+    for (col = 0; col < ncols; ++col) {
+        u16 px = (u16)(RENDER_LEFT_MARGIN_PX + RENDER_CELL_PX * (u16)col);
+
+        for (k = 0; k < 6u; ++k) {
+            if (glyph_row[col] & (u8)(0x80u >> k)) {
+                u16 q = (u16)(px + k);
+                line[q >> 3] |= (u8)(0x80u >> (q & 7u));
+            }
+        }
+    }
+}
+
+/* The packer must reproduce the reference painter for every bit phase. */
+static void test_pack4_matches_reference(void)
+{
+    /* Four glyph bytes with distinct bit patterns inside the 6-px cell. */
+    static const u8 g[4] = { 0xFC, 0xA8, 0x54, 0x84 };
+    u8 want[64];
+    u8 got[3];
+
+    paint_reference(g, 4, want);
+    render_pack4(g, got);
+
+    CHECK(got[0] == want[2]);
+    CHECK(got[1] == want[3]);
+    CHECK(got[2] == want[4]);
+}
+
+/* A single lit cell must not disturb its neighbours' bytes. */
+static void test_pack4_isolation(void)
+{
+    static const u8 only_second[4] = { 0x00, 0xFC, 0x00, 0x00 };
+    u8 got[3];
+
+    render_pack4(only_second, got);
+
+    /* Cell 1 is phase 6: two bits low in byte 2, four bits high in byte 3. */
+    CHECK(got[0] == 0x03);
+    CHECK(got[1] == 0xF0);
+    CHECK(got[2] == 0x00);
+}
+
+/* All cells fully lit must fill bytes 2..4 completely -- no gaps between cells. */
+static void test_pack4_no_gaps(void)
+{
+    static const u8 all_on[4] = { 0xFC, 0xFC, 0xFC, 0xFC };
+    u8 got[3];
+
+    render_pack4(all_on, got);
+
+    CHECK(got[0] == 0xFF);
+    CHECK(got[1] == 0xFF);
+    CHECK(got[2] == 0xFF);
+}
+
+/*
+ * No attribute may light bits 1..0 -- those belong to the cell on the right.
+ * Reverse is the dangerous one: inverting a whole byte sets them every time.
+ */
+static void test_attributes_stay_inside_the_cell(void)
+{
+    static const u8 attrs[3] = { ATTR_REVERSE, ATTR_UNDERLINE,
+                                 (u8)(ATTR_REVERSE | ATTR_UNDERLINE) };
+    u8 a, i;
+
+    for (a = 0; a < 3u; ++a) {
+        u8 out[8];
+
+        render_cell_bytes('A', attrs[a], out);
+        for (i = 0; i < 8u; ++i) {
+            CHECK((out[i] & 0x03u) == 0);
+        }
+    }
+}
+
 int main(void)
 {
     test_render_cell_normal();
@@ -193,6 +279,10 @@ int main(void)
     test_cell_span_phases();
     test_cell_span_last_column();
     test_cell_span_covers_six_pixels();
+    test_pack4_matches_reference();
+    test_pack4_isolation();
+    test_pack4_no_gaps();
+    test_attributes_stay_inside_the_cell();
 
     printf("render: %d checks passed\n", checks);
     return 0;

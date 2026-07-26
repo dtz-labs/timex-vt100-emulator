@@ -45,12 +45,24 @@
 void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1);
 
 /*
+ * Pack four cells into the three scanline bytes they occupy.
+ * g:    four glyph bytes for one scanline, cell in bits 7..2, attributes applied.
+ * out3: the three bytes, in left-to-right scanline order.
+ *
+ * 4 cells x 6 px = 24 px = exactly 3 bytes, so every shift here is a constant.
+ * PURE logic: host-tested, must not include z80.h.
+ */
+void render_pack4(const u8 *g, u8 *out3);
+
+/*
  * Produce 8 pixel row bytes for a single cell.
  * ch: character code (ASCII 0x20-0x7E or graphics 0xDF-0xFE).
  * attr: ATTR_* bits (0 = normal, ATTR_REVERSE = invert, ATTR_UNDERLINE = bottom row).
  * out: output buffer of 8 bytes (scanline order, bit 7 = leftmost pixel).
  *
- * PURE logic: lookup glyph, apply REVERSE (~), apply UNDERLINE (set row 7 to 0xFF).
+ * PURE logic: lookup glyph, apply REVERSE (invert the 6 px the cell owns,
+ * masked to 0xFC) and UNDERLINE (set row 7 to 0xFC) -- neither attribute
+ * touches bits 1..0, which belong to the next cell.
  * This function is host-tested and must not include z80.h.
  */
 void render_cell_bytes(u8 ch, u8 attr, u8 out[8]);
