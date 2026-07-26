@@ -13,6 +13,11 @@ Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/timex-vt1
 VT102-style terminal for Timex 2048/2068-class machines using Timex hi-res
 512x192 video for an 80x24 text display.
 
+![Rogue played over the Timex VT102 terminal in ZEsarUX](docs/rogue.png)
+
+Above: the original Rogue running on a Unix host, played through the Timex
+terminal in ZEsarUX.
+
 The normal emulator workflow uses ZEsarUX plus its ZRCP remote protocol. The
 bridge can either connect the Timex terminal to a real Unix PTY/shell, or to
 local stdin/stdout for testing.
