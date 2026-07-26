@@ -5,53 +5,34 @@
 **Plan:** `docs/superpowers/plans/2026-07-26-80-column-rom-font.md`
 
 The eight planned tasks are complete and each passed its own review. The final
-whole-branch review found **no Critical issues** and judged the branch mergeable
-with two Important fixes. A fix wave for those was started and **interrupted before
-it committed or ran any test**.
+whole-branch review found **no Critical issues**; it named two Important fixes and
+five cleanups, and **all seven have since been applied** in `2b77c81`, `b3b7bba`,
+`b89af4c`, `b6a250f`.
+
+## ⚠️ PR #2 merged without those four commits
+
+PR #2 was merged at `bcf1a73`, which is **one commit before** the fix wave landed.
+So `master` currently carries every issue listed below, while the fixes sit on
+`feat/80-columns`. They need a follow-up merge.
+
+Verify with:
+
+```sh
+git log --oneline origin/master..origin/feat/80-columns
+```
+
+The `wip/final-fix-wave` branch (`690f88f`) holds an earlier, interrupted and never-tested
+attempt at the same wave. It is superseded — **delete it rather than merge it**.
+
+After the fixes: 6238 host checks pass (up from 5980), `make ci` clean, `make tap` builds,
+and `make smoke` against real ZEsarUX still reports 6/6 cells matching.
 
 ---
 
-## Where the interrupted work is
+## What the four commits fix
 
-`wip/final-fix-wave` (`690f88f`) — a single WIP commit holding the interrupted
-fix wave. It is **unverified**: no test run covers it, and two of the seven
-findings were never reached.
-
-```sh
-git show wip/final-fix-wave              # read it
-git diff feat/80-columns wip/final-fix-wave
-```
-
-It touches `README.md`, `include/hires.h`, `include/render.h`, `src/font.c`,
-`src/render.c`, `test/test_font.c`, `test/test_render.c` — so findings 1, 2, 4, 6
-and 7 below appear attempted, and findings 3 and 5 were not started.
-
-**Do not merge that branch.** Treat it as a draft to read, not to trust. Re-doing
-the fixes from the descriptions below is cheap; auditing a half-finished, untested
-edit is not.
-
-## How to resume
-
-```sh
-cd /Volumes/SSD/Programowanie/timex-vt100-emulator-feat-80-columns
-git checkout feat/80-columns             # clean at b2459e4
-make test                                # expect 5980 checks, ALL HOST TESTS PASSED
-```
-
-Then work through the findings below. Verify with `make ci` (host tests +
-`py_compile` + terminfo check), `make tap`, and — for anything touching the
-renderer — `ZRCP_PORT=10140 SMOKE_WAIT=12 make smoke`, which must report 6/6 cells
-matching.
-
-Note `test/run.sh` is mode 100644 and not executable; `make test` is the entry
-point (`Makefile:126` wraps it in `sh`).
-
-The full execution ledger, with every decision and ruling made during the run,
-is at `.superpowers/sdd/2026-07-26-80-column-rom-font/progress.md`. It is
-git-ignored, so it exists only in this worktree — the essentials are reproduced
-below so they survive without it.
-
----
+The sections below describe the state of `master` as merged. Each is already fixed on
+`feat/80-columns`; they are kept here as the record of what was wrong and why it mattered.
 
 ## Fix before merge
 
