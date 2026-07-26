@@ -89,8 +89,9 @@ IF1_MAP := $(IF1_APP).map
 
 # IM2 vector table placement. main.c writes these addresses absolutely, so the
 # linker cannot know about them -- check_image_limit.py is what enforces them.
-IM2_TABLE_BASE ?= 0xD300
-IM2_TABLE_FILL ?= 0xD4
+# Parsed out of include/im2.h so the gate and the program cannot disagree.
+IM2_TABLE_BASE ?= $(shell sed -n 's/^\#define IM2_TABLE_BASE[[:space:]]*\(0x[0-9A-Fa-f]*\).*/\1/p' include/im2.h)
+IM2_TABLE_FILL ?= $(shell sed -n 's/^\#define IM2_TABLE_FILL[[:space:]]*\(0x[0-9A-Fa-f]*\).*/\1/p' include/im2.h)
 CHECK_IMAGE_LIMIT = python3 tools/check_image_limit.py
 IF1_BAUD ?= RS_BAUD_9600
 IF1_DEFS ?= -DCONN_BACKEND_IF1 -DCONN_IF1_BAUD=$(IF1_BAUD)
@@ -264,6 +265,8 @@ print-vars:
 	@echo "IF1_TAP=$(IF1_TAP)"
 	@echo "IF1_MAP=$(IF1_MAP)"
 	@echo "IF1_BAUD=$(IF1_BAUD)"
+	@echo "IM2_TABLE_BASE=$(IM2_TABLE_BASE)"
+	@echo "IM2_TABLE_FILL=$(IM2_TABLE_FILL)"
 	@echo "VERSION=$(VERSION)"
 	@echo "BUILD_DATE=$(BUILD_DATE)"
 	@echo "GIT_COMMIT=$(GIT_COMMIT)"

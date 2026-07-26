@@ -19,8 +19,11 @@
 #include "keymap.h"
 #include "keybuf.h"
 #include "build_meta.h"
+#include "im2.h"
 #include <z80.h>
 #include <intrinsic.h>
+#include <stdint.h>
+#include <string.h>
 
 static const u8 demo_stream[] =
     "\x1b[2J"
@@ -187,28 +190,27 @@ void keyboard_im2_isr(void) __naked
     __endasm;
 }
 
-static void install_keyboard_im2(void) __naked
+static void install_keyboard_im2(void)
 {
+    u8 *table = (u8 *)(uintptr_t)IM2_TABLE_BASE;
+    u8 *tramp = (u8 *)(uintptr_t)IM2_TRAMPOLINE;
+    u16 isr = (u16)(uintptr_t)&keyboard_im2_isr;
+
+    intrinsic_di();
+
+    /* 257 entries: the vector read can land on the last table byte and still
+     * needs a high byte after it. */
+    memset(table, IM2_TABLE_FILL, 257u);
+
+    tramp[0] = 0xC3u;              /* JP nnnn */
+    tramp[1] = (u8)(isr & 0xFFu);
+    tramp[2] = (u8)(isr >> 8);
+
     __asm
-        di
-        ld      hl,#0xD300
-        ld      de,#0xD301
-        ld      bc,#257
-        ld      a,#0xD4
-        ld      (hl),a
-        ldir
-        ld      hl,#0xD4D4
-        ld      (hl),#0xC3
-        inc     hl
-        ld      de,#_keyboard_im2_isr
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        ld      a,#0xD3
+        ld      a,#IM2_VECTOR_PAGE
         ld      i,a
         im      2
         ei
-        ret
     __endasm;
 }
 
