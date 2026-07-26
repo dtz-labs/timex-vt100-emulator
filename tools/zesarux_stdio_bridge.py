@@ -389,7 +389,7 @@ class Bridge:
         self.stdin_restore = None
 
     def wait_input_empty(self, pump_output):
-        deadline = time.monotonic() + self.args.timeout
+        deadline = time.monotonic() + self.args.input_timeout
 
         while True:
             if pump_output:
@@ -511,6 +511,13 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--map", default=DEFAULT_MAP)
     parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--input-timeout",
+        type=float,
+        default=60.0,
+        help="Seconds to wait for the target to drain its input mailbox; the "
+        "target may be busy (e.g. an app still booting) and not reading keys.",
+    )
     parser.add_argument("--poll-interval", type=float, default=0.02)
     parser.add_argument("--send-delay", type=float, default=0.02)
     parser.add_argument("--drain-after-eof", type=float, default=2.0)
