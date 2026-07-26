@@ -1,5 +1,5 @@
 /*
- * font.c -- 8x8 glyph lookup for the terminal (pure, host-tested).
+ * font.c -- 6x8 glyph lookup for the terminal (pure, host-tested).
  *
  * See font.h for the character mapping rules.
  */

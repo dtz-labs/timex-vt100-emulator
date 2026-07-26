@@ -7,6 +7,10 @@
  *
  * PURE part (host-tested, no z80.h):
  * - render_cell_bytes(ch, attr, out[8]): produce 8 row bytes for one cell.
+ * - render_cell_span(col, ...): locate a cell's byte(s) inside a scanline.
+ * - render_pack4(g, out3): pack four cells' worth of pixels into 3 bytes.
+ * - render_row_bytes(g80, ev, od): pack one full scanline into the two
+ *   32-byte display-file rows that hold it.
  *
  * Hardware part (ZEsarUX-tested only):
  * - render_flush(s): blit all dirty rows to display, clear dirty flags.
