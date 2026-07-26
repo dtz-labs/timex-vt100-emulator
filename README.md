@@ -4,8 +4,9 @@
 
 **[▶ Run the terminal in your browser](https://dtz-labs.github.io/timex-vt100-emulator/)** —
 every push to `master` deploys the current TAP to GitHub Pages, where it runs on
-an emulated Timex TC2048 in the [JSSpeccy 3](https://github.com/gasman/jsspeccy3)
-fork that adds Timex video. There is no host behind it, so the terminal runs in
+an emulated Timex TC2048 in the [dtz-labs fork](https://github.com/dtz-labs/jsspeccy3)
+of [JSSpeccy 3](https://github.com/gasman/jsspeccy3) that adds Timex video.
+There is no host behind it, so the terminal runs in
 loopback: type and the bytes come back through the VT parser onto the screen.
 Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/timex-vt100-emulator/issues/1).
 
