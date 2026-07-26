@@ -85,7 +85,7 @@ static void test_render_cell_graphics(void)
     CHECK(out[0] == 0x00);
     CHECK(out[1] == 0x00);
     CHECK(out[2] == 0x00);
-    CHECK(out[3] == 0xFF);
+    CHECK(out[3] == 0xFC);  /* horizontal run spans the 6-px cell */
     CHECK(out[4] == 0x00);
     CHECK(out[5] == 0x00);
     CHECK(out[6] == 0x00);
