@@ -1099,10 +1099,10 @@ static const u8 demo_stream[] =
     "\x1b[2J"
     "\x1b[H"
     "\x1b(0"
-    "lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk\r\n"
-    "x VT-102 TERMINAL EMULATOR                        80 columns, TT3000 6x8 font x\r\n"
-    "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test                                              x\r\n"
-    "mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj"
+    "lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk\r\n"
+    "x VT-102 TERMINAL EMULATOR                         80 columns, TT3000 6x8 font x\r\n"
+    "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test                                                     x\r\n"
+    "mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj"
     "\x1b(B"
     "\x1b[5;1H"
     "Version v" APP_VERSION_STR "  " APP_GIT_COMMIT "\r\n"
@@ -1119,7 +1119,22 @@ static const u8 demo_stream[] =
     "Ready.";
 ```
 
-The box is exactly 80 characters wide: `l`, 78 `q`, `k`. Count them — an off-by-one wraps the line and scrolls the screen on boot, which looks like a renderer fault.
+The box is exactly 80 characters wide (`l`, 78 `q`, `k`) and each inner line is 80 visible
+columns once the SGR escapes are discounted. Do not count by eye — verify:
+
+```sh
+python3 - <<'EOF'
+import re
+for s in open('src/main.c'):
+    s = s.strip()
+    if s.startswith('"') and ('lq' in s or s.startswith('"x ') or 'qj' in s):
+        v = re.sub(r'\\x1b\[[0-9;]*[A-Za-z]', '', s).strip('"').replace('\\r\\n', '')
+        print(len(v), repr(v[:20]))
+EOF
+```
+
+Every box line must print 80. An off-by-one wraps the line and scrolls the screen on boot,
+which reads as a renderer fault rather than a miscounted string.
 
 - [ ] **Step 4: Update the README**
 
