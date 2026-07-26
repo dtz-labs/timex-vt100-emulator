@@ -34,9 +34,9 @@ and `make smoke` against real ZEsarUX still reports 6/6 cells matching.
 The sections below describe the state of `master` as merged. Each is already fixed on
 `feat/80-columns`; they are kept here as the record of what was wrong and why it mattered.
 
-## Fix before merge
+### Important
 
-### 1. `include/hires.h:8` and `:18` — a header contract this branch made false
+#### 1. `include/hires.h:8` and `:18` — a header contract this branch made false
 
 Line 8 says *"A character cell is 8 px wide = exactly one byte (always aligned)"*.
 Lines 18–19 document `hires_addr`'s first parameter as *"character column `col`
@@ -56,7 +56,7 @@ Comments only. Do not change code in `hires.c`/`hires.h`. Reword to describe a b
 column 0..63 and note that a 6-px cell spans one or two of them, pointing at
 `render_cell_span()`.
 
-### 2. `test/test_font.c` — the containment assertion covers only half the font
+#### 2. `test/test_font.c` — the containment assertion covers only half the font
 
 `test_no_glyph_exceeds_six_pixels` walks `0x20..0x7E` only. The DEC graphics page
 `0xDF..0xFE` was hand-redrawn on this branch and has no containment assertion.
@@ -78,7 +78,7 @@ assertions its predecessor had — both should be `0x00`.
 
 ---
 
-## Cleanups — small, may ship as follow-ups
+### Cleanups
 
 3. **`site/index.html` — add `sandbox: true`.** JSSpeccy's default UI includes an
    archive.org tape search that fetches from a third party. An earlier note kept it,
@@ -117,9 +117,9 @@ assertions its predecessor had — both should be `0x00`.
 
 ## Human-only work
 
-- **Retake the three README screenshots at 80 columns.** `README.md` currently
-  claims 80×24 a few lines above images that still show 64. This must land before
-  merge or the public README contradicts itself.
+- **Retake the three README screenshots at 80 columns.** `README.md` on `master`
+  already claims 80×24 a few lines above images that still show 64, so the public
+  README contradicts itself right now.
 - **ZEsarUX visual pass** — even margins, DEC box joints across the full width,
   cursor inverting exactly one cell at every bit phase, and whether 6 px at 80
   columns is comfortable to read. This is the one spec §10 item no automated
