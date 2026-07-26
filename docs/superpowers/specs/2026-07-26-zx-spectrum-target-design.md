@@ -5,9 +5,9 @@
 packing scheme, and the cell/attribute model carry over unchanged. This spec adds
 a second build target and supersedes D16 for the paths listed in §7.
 **Baseline:** branch `feat/zx-spectrum-target`, cut from `feat/80-columns`
-(commit `951b728`). Note that `feat/80-columns` carries six commits that are
-**not** in `origin/master` — the fix wave landed after PR #2 was merged. Those
-must reach `master` alongside or before this work.
+(commit `951b728`). The fix wave that PR #2 missed has since landed on `master`
+via PR #3, so this baseline is fully contained in `master` and the branch adds
+only this document.
 **Status:** Approved design, pending implementation plan.
 
 ---
@@ -33,12 +33,12 @@ Continuing the D-numbering.
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D17 | **Two TAPs from one source tree, selected in the Makefile. Not one universal binary.** | A universal binary forces the display width to be runtime state, which means rewriting the ~25 uses of `COLS` in `screen.c`/`vtparse.c` into `s->cols` and carrying both blitters in every image. Two targets keep `COLS` a compile-time constant, leave the pure core untouched, and let the linker drop the geometry that is not built. Cost: two release artifacts instead of one (§10). |
+| D17 | **Two TAPs from one source tree, selected in the Makefile. Not one universal binary.** | A universal binary forces the display width to be runtime state, which means rewriting the ~25 uses of `COLS` in `screen.c`/`vtparse.c` into `s->cols` and carrying both blitters in every image. Two targets keep `COLS` a compile-time constant, leave the pure core untouched, and let the linker drop the geometry that is not built. Cost: two release artifacts instead of one (§3, and the risk table in §11). |
 | D18 | **The Spectrum build is 40×24, not the 42 that would fit.** | 4 cells × 6 px = 24 px = exactly 3 bytes, so 40 cells are 10 groups filling scanline bytes 1..30, with a byte-aligned 8-px margin each side. 42 cells would leave a 2-cell tail straddling a half-byte, needing a separate path in packing, scrolling, and cursor drawing. Two extra columns is not worth a second code path in three places. |
-| D19 | **`COLS` stays a compile-time constant, derived from a single machine define.** | Direct consequence of D17. The build passes exactly one of `-DTERM_TIMEX` / `-DTERM_ZX`; `screen.h` derives `COLS` from it. Width is never passed independently, so a mismatched pair — a ZX build told it has 80 columns — cannot be expressed. `screen.c` and `vtparse.c` need **no change at all**; tab-stop bitmap sizing in `vtparse.h` already derives from `COLS`. |
+| D19 | **`COLS` stays a compile-time constant, derived from a single machine define.** | Direct consequence of D17. The build passes exactly one of `-DTERM_TIMEX` / `-DTERM_ZX`; `screen.h` derives `COLS` from it. Width is never passed independently, so a mismatched pair — a ZX build told it has 80 columns — cannot be expressed. **The second width costs `screen.c` and `vtparse.c` no change at all**; tab-stop bitmap sizing in `vtparse.h` already derives from `COLS`. (`screen.c` *is* modified in this slice, but by the performance items in §7, not by the target split. `vtparse.c` is untouched throughout.) |
 | D20 | **The Spectrum build is monochrome with one global colour.** | A cell is 6 px; an attribute block is 8 px. Per-cell colour is physically impossible — a colour change mid-line would corrupt the neighbouring cell. The attribute file is filled once with `0x47` (bright white on black), border black. This matches Timex hi-res, which is also monochrome, so `REVERSE` and `UNDERLINE` behave identically on both machines. |
 | D21 | **Machine detection is kept, but as a wrong-machine guard and a banner line — not a mode selector.** | With D17 there is no mode to select. The Timex build on a Spectrum would render garbage (half its pixels go to `0x6000`, which the ULA does not display), so that build refuses to start on a non-SCLD machine. The reverse needs no guard: a Timex boots in Spectrum-compatible ULA mode, so the Spectrum TAP runs correctly on it at 40 columns. |
-| D22 | **Holding CAPS SHIFT at boot bypasses the guard.** | Insurance for clones and interfaces that decode port `$FF` incompletely and could make a genuine Timex fail the probe. Costs a few dozen bytes and cannot be debugged any other way on real hardware. |
+| D22 | **Holding CAPS SHIFT at boot bypasses the guard. Timex build only.** | Insurance for clones and interfaces that decode port `$FF` incompletely and could make a genuine Timex fail the probe. Costs a few dozen bytes and cannot be debugged any other way on real hardware. The Spectrum build has no guard, so the key does nothing there. Accepted consequence: holding CAPS SHIFT with the Timex TAP on a real Spectrum produces exactly the unreadable half-image D21 exists to prevent — that is the point of an override, and it is reachable only by deliberate action. |
 | D23 | **The IM2 vector table moves to a high address and gains a build-time image-limit gate.** | `main.c` writes the table at a hardcoded `0xD300` and its trampoline at `0xD4D4`; the linker knows nothing about either. Today's image ends at `0xCD58`, leaving 1448 bytes. Growing past that produces a build that links cleanly and then overwrites its own code during IM2 setup. See §8. |
 | D24 | **The performance findings that touch the code this slice rewrites are done here, not deferred.** | Supersedes D16 for these paths only. Writing the ULA blitter as a copy of the current hi-res path would produce code that the review already shows must be rewritten. See §7 for what is in and what is explicitly not. |
 | D25 | **T-state benchmarks are recorded, not enforced in CI.** | A regression threshold needs a pinned compiler; `ci.yml` uses `z88dk/z88dk:latest`. Numbers are printed and committed as reference points. |
@@ -67,8 +67,9 @@ therefore chosen on **simplicity**, not on memory — they delete a refactor of 
 pure core that would otherwise be the largest single piece of this work.
 
 The cost of D17 is two artifacts and a user who must pick the right one. That is
-softened by D21: the Spectrum TAP runs on both machine families, so it is a safe
-default for anyone unsure.
+softened by D21: the Spectrum TAP runs on **ZX Spectrums and the TC2048**, so it
+is the safe default for anyone unsure between those. It is not a universal
+fallback — a TS2068 cannot load either TAP, for the tape-format reason in §11.
 
 ---
 
@@ -124,8 +125,18 @@ so scrolling never has to move attributes.
 Per D19 the width is not a separate define. `screen.h` derives `COLS` from the
 machine define and fails to compile if neither or both are set.
 
-Artifacts: `build/term.tap`, `build/term-zx.tap`, `build/term-if1.tap`,
-`build/term-zx-if1.tap`.
+Artifacts, stated explicitly so the target-to-filename mapping is not guessed
+(the target suffixes the machine last, the artifact places it first):
+
+| Target | Artifact |
+|---|---|
+| `make tap` | `build/term.tap` |
+| `make tap-zx` | `build/term-zx.tap` |
+| `make if1` | `build/term-if1.tap` |
+| `make if1-zx` | `build/term-zx-if1.tap` |
+
+`RELEASE_NAME` in the Makefile and the release workflow gain the same `-zx`
+element, so a release ships four TAPs.
 
 File layout after the split. The pairs are alternatives — the Makefile compiles
 exactly one of each into a given image.
@@ -141,10 +152,19 @@ exactly one of each into a given image.
 | `video_ula.c` | ZX only | attribute fill, border, clear one file |
 | `machine.c` | both targets | port probes, guard, banner name |
 | `machine_class.c` | host + both targets | pure: `machine_classify()` |
-| `screen.c`, `vtparse.c` | unchanged | — |
+| `hires.c` / `hires.h` | host + Timex | survives as its own module with its own test, unchanged; `blit_hires.c` calls it rather than absorbing it |
+| `ula.c` / `ula.h` (new) | host + ZX | its counterpart: `ula_addr()`, the one-file address helper |
+| `video.c` | **removed** | split into `video_hires.c` and `video_ula.c`; `video.h` keeps the shared prototypes |
+| `screen.c` | modified by §7 only | untouched by the target split; the performance items rewrite its scrolling and dirty tracking |
+| `vtparse.c` | unchanged | — |
 
-Both `render_hires.c` and `render_ula.c` are compiled on the host so that both
-geometries stay under test regardless of which target is being built.
+`render_hires.c` and `render_ula.c` export the **same symbol names**
+(`render_cell_span`, `render_row_bytes`), so they are alternatives, never linked
+together. The host keeps both under test through the two-pass `test/run.sh` of
+§10: the `-DTERM_TIMEX` pass links `render_hires.c`, the `-DTERM_ZX` pass links
+`render_ula.c`, and `test_render.c` gates its geometry-specific assertions on the
+same define. Linking both into one binary would be a duplicate-symbol error and
+is never done.
 
 This split also repairs an existing inconsistency: `render.c` documents a
 PURE/hardware separation in its own header comment while holding both sides.
@@ -155,8 +175,11 @@ PURE/hardware separation in its own header comment while holding both sides.
 
 Ported to C from `docs/hardware/detect_machine_ay.asm` in the `attribute-wars`
 repository (reference detector, 2026-06-23). No `.asm` file needs to enter the
-build: `z80_inp(0x00FF)` compiles to `ld bc,$00ff / in a,(c)`, which is exactly
-what the floating-bus probe requires.
+build: `z80_inp(0x00FF)` performs the same 16-bit-port I/O transaction the
+floating-bus probe requires — the full port in `BC`, so A15–A8 are `0x00`. (It is
+not literally inlined as `ld bc,$00ff / in a,(c)`; under `sdcc_iy` it is a library
+call that loads `BC` from `HL` and does `in l,(c)`. The bus cycle is equivalent,
+which is what matters here.)
 
 **Pure decision table** — the only part that can be tested without hardware:
 
@@ -187,7 +210,8 @@ unreachable ones.
 - The AY probes write and read back `$55`, `$AA`, `$3C` in register 11, then
   restore the original value. Register 11 remains **selected** afterwards,
   because the currently selected register cannot be read back. This is inherited
-  from the reference detector and must stay documented.
+  from the reference detector and must be repeated as a comment on the probe in
+  `machine.c`, since a later AY user would otherwise be surprised by it.
 
 **Preconditions.** Detection runs once at startup, with interrupts disabled,
 **before** video initialisation and **before** the IM2 handler is installed.
@@ -198,6 +222,10 @@ message using the ULA text mode that is already active at boot and halts, rather
 than painting an unreadable half-image. The Spectrum build never refuses; it only
 reports the detected machine.
 
+The CAPS SHIFT bypass is sampled in the same startup window as the probes —
+keyboard half-row port `0xFEFE`, bit 0, active low — read directly, before the
+IM2 handler is installed, since `keymap`/`keybuf` are not running yet.
+
 Both builds print the detected name in the startup banner, so a detection fault
 on real hardware is visible rather than silent.
 
@@ -205,9 +233,10 @@ on real hardware is visible rather than silent.
 
 ## 7. Performance work carried into this slice
 
-`perf-review.md` (2026-07-26) measured the current renderer and the 80-column
-implementation. Relevant figures, all from `z88dk-ticks`, CPU T-states only,
-excluding display contention:
+`docs/superpowers/reviews/2026-07-26-perf-review.md` measured the current
+renderer and the 80-column implementation. It is committed alongside this spec
+so every number below can be traced. Relevant figures, all from `z88dk-ticks`,
+CPU T-states only, excluding display contention:
 
 | Path | Measured | Diagnostic variant |
 |---|---:|---:|
@@ -281,10 +310,13 @@ build:
 0x8000  program start (ORG)
 0xCD58  end of image
         1448 bytes free
-0xD300  IM2 vector table, 257 bytes of 0xD4, I = 0xD3   <- hardcoded in main.c
-0xD4D4  IM2 trampoline: JP keyboard_im2_isr             <- hardcoded in main.c
-        11,048 bytes free
-0xFFFF  top of stack
+0xD300  IM2 vector table, I = 0xD3                      <- hardcoded in main.c
+        257 bytes are architecturally required (0xD300-0xD400); the code
+        actually writes 258 (seeds one byte, then LDIR with BC=257), so
+        it touches 0xD300-0xD401. The gate must use the real footprint.
+0xD4D4  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- hardcoded in main.c
+        0xD4D7-0xFFFF = 11,049 bytes free, shared with the stack
+0xFFFF  stack seed
 ```
 
 The terminal uses IM2 so the keyboard is sampled 50 times a second and buffered;
@@ -296,13 +328,25 @@ Two hazards follow, and both are addressed by D23:
 1. **Silent overwrite.** Neither address is known to the linker. An image that
    grows past `0xD300` links cleanly and then destroys itself during IM2 setup.
    `tools/check_image_limit.py` reads the map, compares the end of the image
-   (including BSS) against the table base, and fails the build. Wired into
-   `make tap`, `make tap-zx`, and CI.
+   (including BSS) against the table base, and fails the build. It also checks
+   the **other** side — that the table and trampoline clear the stack — because
+   after relocation both live in the region the stack grows down into. Wired
+   into `make tap`, `make tap-zx`, and CI.
 2. **An artificially small margin.** Relocating the table into the 11 KB above
-   the trampoline raises the margin from 1448 bytes to several kilobytes. The
-   target address must be chosen **after** reading the stack location from the
-   map file, and the base becomes a single named constant shared by the assembly
-   and the gate script.
+   the trampoline raises the margin from 1448 bytes to several kilobytes.
+
+   The address is measured in milestone 1, but it is not free choice — it must
+   satisfy all of:
+
+   - the table base is `I << 8`, so it is 256-byte aligned;
+   - the table is 257 bytes of one repeated value `X`, so any vector read yields
+     the same address;
+   - the trampoline therefore sits at `0x0101 * X` and occupies 3 bytes;
+   - both must clear the stack, which lives in the same free region, with margin
+     for its high-water mark.
+
+   The base becomes a single named constant shared by the assembly and the gate
+   script, so the two can never disagree.
 
 **The 1448-byte figure is from the 64-column build on `master`.** The 80-column
 build is larger — `row_glyphs[80]`, `row_attrs[80]`, and `row_pixels[80]` alone
@@ -342,26 +386,38 @@ name and the active geometry.
   (the last stop lands on 32 at 40 columns), erase-in-line, insert/delete
   character, and cursor clamping at both widths **without any production code
   change** — the direct payoff of D19.
-- `test_machine.c` (new): `machine_classify()` over all eight input
-  combinations.
+- `test_machine_class.c` (new, named for its module per the `test_<module>.c`
+  convention): `machine_classify()` over all eight input combinations.
 - `test_render.c`: ULA cell span, row packing (10 groups into bytes 1..30, bytes
   0 and 31 untouched), and the 6-px containment check extended to the ULA
   geometry. Existing hi-res assertions unchanged.
 - Dirty-group tests: one `screen_putc` marks exactly one group; a scroll migrates
   group metadata with the rows instead of discarding it.
+- Cursor tests for §7 item 2: an XOR toggle off followed by a toggle on restores
+  the exact prior pixels, and neither marks a row or group dirty.
+- A negative build check that `screen.h` refuses to compile when neither or both
+  of `TERM_TIMEX` / `TERM_ZX` are defined (§5).
 
 **Target** (ZEsarUX):
 
 - `term.tap` on `--machine TC2048`: 80 columns, banner reads `TC2048`.
 - `term-zx.tap` on `--machine 48k`: 40 columns, banner reads `ZX48`.
+- `term-zx.tap` on `--machine TC2048`: 40 columns, banner reads `TC2048`, output
+  correct. **This is the combination that proves D21's reverse claim** — the one
+  that makes the Spectrum TAP the safe default and so softens D17's main cost.
+  Without it that claim is sold but never verified.
 - `term.tap` on `--machine 48k`: the guard message appears and the program halts
   (D21).
+- `term.tap` on `--machine 48k` with CAPS SHIFT held during load: the guard is
+  bypassed and the program runs on into its (unreadable) half-image, proving the
+  D22 override works rather than merely being specified.
 - `test/zesarux_smoke.py` gains a ULA cell reader — one file, scanline bytes
   1..30 — alongside the existing hi-res reader.
 
 **Benchmarks** (D25): `z88dk-ticks` over one normal row at each width, one model
-scroll, and one video scroll. Results are committed as reference numbers and
-printed by CI, not enforced.
+scroll, and one video scroll. Results are committed to `docs/perf/benchmarks.md`
+as reference numbers, with the compiler version that produced them recorded
+alongside, and printed by CI, not enforced.
 
 This is a **deliberate reduction** of the harness the review asks for. The review
 specifies coverage of mixed attribute rows, blank rows, full repaint, both scroll
@@ -382,7 +438,7 @@ the §7 extrapolation for 40 columns. The rest belongs with the contract fix tha
 | **TS2068 cannot load Spectrum-format TAPs.** Its ROM differs; z88dk targets it separately with `+ts2068`. | Accepted and documented. Detection recognises the machine, but the Timex TAP targets the TC2048. Running on a TS2068 needs a Spectrum-ROM cartridge or an emulator. |
 | Clones or interfaces that decode port `$FF` incompletely make a genuine Timex fail the guard. | CAPS SHIFT bypass (D22), plus the machine name in the banner so the fault is visible. |
 | The 80-column image may already be close to the IM2 table; the known margin is from the 64-column build. | First implementation task measures it; the gate then makes any future overrun a build failure (§8). |
-| Two artifacts, and users may pick the wrong one. | The Spectrum TAP runs on both families, so it is the safe default. The Timex TAP refuses rather than showing garbage. |
+| Two artifacts, and users may pick the wrong one. | The Spectrum TAP runs on ZX Spectrums **and the TC2048**, so it is the safe default between those two — verified by the fourth smoke combination in §10. It is not a universal fallback: a TS2068 loads neither TAP (row 1). The Timex TAP refuses rather than showing garbage. |
 | The 40-column T-state figures are extrapolated, not measured. | The benchmark in §10 confirms them before the performance work is called done. |
 | **The scroll/dirty contract is split across two slices** (§7). This slice implements four of the five steps of the review's robust model and defers the fifth. The deferred piece — `main.c` predicting scrolls from raw bytes — is a P0 the review places *before* the packer work. | Item 7 in §7 is mandatory precisely because removing the `main.c` cursor-row dirtying without it would drop characters on deferred wrap. The residual defect is unchanged from today's behaviour, not worsened. If the deferred piece proves entangled during implementation, pull it in rather than working around it. |
 
@@ -412,11 +468,18 @@ assembly renderer; the page-aligned font; the scroll/dirty contract fix (§7).
 7. Add `blit_ula.c` and `video_ula.c`, written **directly in the fast form**
    established by milestone 4; add the `tap-zx` and `if1-zx` targets; teach
    `test/run.sh` the second compile at `-DTERM_ZX`.
-8. Add `zx-vt102.terminfo`, the bridge width option, the loop-drawn banner, and
-   the README updates.
-9. ZEsarUX smoke on all three target/machine combinations; record the 40-column
-   benchmark numbers.
+8. Add `zx-vt102.terminfo` and register it with the Makefile's existing
+   `terminfo-check` target; add the bridge width option, the loop-drawn banner,
+   and the README and `CLAUDE.md` updates (the latter names `hires.c` and
+   `video.c` as the hardware-isolation points, which §5 changes).
+9. ZEsarUX smoke on all **five** combinations in §10; record the 40-column
+   benchmark numbers and wire the benchmark run into CI as a printed step.
 
 The performance work is milestone 4, **before** the ULA blitter exists, so that
 `blit_ula.c` is written once in its final shape. Doing it the other way round
 would create the copy of the slow path that D24 exists to prevent.
+
+**Milestones 1 and 2 should land as their own pull request, first.** They protect
+the *current* 80-column build, depend on nothing in this spec, and by §8's own
+argument must land before the image grows. Holding them behind the whole ZX
+target would leave the hazard armed for the length of this work.
