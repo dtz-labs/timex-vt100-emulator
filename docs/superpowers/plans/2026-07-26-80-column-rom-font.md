@@ -17,7 +17,8 @@
 - Pass structs by pointer or out-pointer. **Never return a struct by value** — it crashes SDCC's z80 backend.
 - No float, no `malloc`, no recursion, no headers that shadow z88dk system headers.
 - Only hardware-facing code may include `<z80.h>`. Pure modules must compile on the host.
-- `test/run.sh` compiles with `-std=c99 -Wall -Wextra -Werror`. Every task must leave it passing.
+- Run the host tests with `make test` (Makefile:126 runs `sh test/run.sh`; the script is not executable, so invoking it directly fails). It compiles with `-std=c99 -Wall -Wextra -Werror`. Every task must leave it passing.
+- When a task changes anything under `tools/` or `test/*.py`, run `make ci` as well — it adds `python3 -m py_compile` over those files plus a terminfo check.
 - Commit subjects use `module: concise change`, imperative mood.
 - Screen layout constants, fixed for the whole plan: **80 columns × 6 px**, **16 px left margin**, cells occupy scanline bytes **2–61**, file indices **1–30** in each display file.
 - The ROM used for extraction is `~/TT3000/TT3000.rom`. It is **not** committed; the generated header is.
@@ -166,7 +167,7 @@ static void test_render_cell_reverse_underline(void)
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: FAIL — `test_font` aborts on the `assert` inside `test_glyph_A`, because `FONT_ASCII` still holds the hand-authored 8-px glyphs (`g[0]` is `0x70`, not `0x00`).
 
 - [ ] **Step 3: Write the extractor**
@@ -271,7 +272,7 @@ In `src/font.c`, replace the single include at line 9:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS, ending in `ALL HOST TESTS PASSED`. Both `test_font` and
 `test_render` now assert the ROM glyph.
 
@@ -375,7 +376,7 @@ to:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: FAIL in `test_font` — `FONT_GRAPH` still holds 8-px art, so `horiz[3]` is `0xFF` rather than `0xFC`.
 
 - [ ] **Step 3: Rewrite the generator**
@@ -477,7 +478,7 @@ Run:
 
 ```bash
 python3 tools/genfont.py > src/font_graph_data.h
-test/run.sh
+make test
 ```
 
 Expected: PASS, ending in `ALL HOST TESTS PASSED`.
@@ -592,7 +593,7 @@ Register them in `main()`:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: FAIL at compile time — `error: implicit declaration of function 'render_cell_span'`, which `-Werror` turns fatal.
 
 - [ ] **Step 3: Write the implementation**
@@ -638,7 +639,7 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS, ending in `ALL HOST TESTS PASSED`.
 
 - [ ] **Step 5: Commit**
@@ -783,7 +784,7 @@ single expression changed:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: FAIL at compile time — `error: implicit declaration of function 'render_pack4'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -842,7 +843,7 @@ void render_pack4(const u8 *g, u8 *out3)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS, ending in `ALL HOST TESTS PASSED`.
 
 - [ ] **Step 5: Commit**
@@ -887,7 +888,7 @@ host TDD"
 
 - [ ] **Step 2: Run the tests to confirm they still pass at 64 columns**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS. This proves the test edit is width-neutral before the width changes.
 
 - [ ] **Step 3: Flip COLS and update the comments around it**
@@ -902,7 +903,7 @@ The header comment says "A 64x24 grid of character cells"; change it to "An 80x2
 
 - [ ] **Step 4: Run the tests to see the renderer break**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS for `test_screen` and `test_vtparse` (they are written against `COLS`), but the renderer is now wrong on target — it still writes one byte per cell and would run off the end of the display file. Nothing catches that on the host, which is why the next step is not optional.
 
 - [ ] **Step 5: Rewrite the row blitter**
@@ -1011,7 +1012,7 @@ XOR replaces the previous read-complement-write: it inverts exactly the cell's o
 
 - [ ] **Step 7: Run the tests**
 
-Run: `test/run.sh`
+Run: `make test`
 Expected: PASS, ending in `ALL HOST TESTS PASSED`.
 
 - [ ] **Step 8: Build the TAP and check the memory map**
@@ -1139,7 +1140,7 @@ In `README.md`:
 Run:
 
 ```bash
-test/run.sh
+make test
 make tap
 ```
 
