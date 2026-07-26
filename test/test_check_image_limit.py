@@ -72,6 +72,29 @@ def test_fails_when_table_hits_the_stack():
         check(any("stack" in p for p in rep.problems), "the problem names the stack")
 
 
+def test_fails_when_trampoline_touches_the_stack_floor_exactly():
+    with tempfile.TemporaryDirectory() as d:
+        # Table 0xD300..0xD401, trampoline 0xD4D4..0xD4D6 (0xD4D7 exclusive).
+        # SP 0xD6D7 minus 0x0200 of stack puts the floor at exactly 0xD4D7:
+        # the highest IM2 byte and the stack floor coincide -- a genuine
+        # zero-byte margin, not an overlap.
+        rep = cil.analyse(
+            write_map(d, "$CD58", register_sp="$D6D7", stack_size="$0200"),
+            0xD300,
+            0xD4,
+        )
+        check(not rep.ok, "IM2 data touching the stack floor exactly fails")
+        check(any("stack" in p for p in rep.problems), "the problem names the stack")
+        check(
+            any("zero-byte margin" in p for p in rep.problems),
+            "the problem explains the zero margin rather than claiming an overlap",
+        )
+        check(
+            not any("past the stack floor" in p for p in rep.problems),
+            "a zero-byte margin is not described as past the floor",
+        )
+
+
 def test_rejects_a_misaligned_table_base():
     with tempfile.TemporaryDirectory() as d:
         rep = cil.analyse(write_map(d, "$CD58"), 0xD301, 0xD4)
@@ -93,6 +116,7 @@ def main():
     test_fails_when_image_reaches_the_table()
     test_fails_when_image_overlaps_the_table()
     test_fails_when_table_hits_the_stack()
+    test_fails_when_trampoline_touches_the_stack_floor_exactly()
     test_rejects_a_misaligned_table_base()
     test_table_and_trampoline_must_not_overlap()
     print("check_image_limit: %d checks passed" % CHECKS)

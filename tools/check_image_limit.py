@@ -97,8 +97,23 @@ def analyse(map_path, im2_base, im2_fill):
             % (rep.trampoline, im2_fill, im2_base, rep.table_end - 1)
         )
 
+    # Like the image-vs-table boundary above, table_end and trampoline_end are
+    # exclusive one-past-last-byte bounds, exactly the same shape as the stack
+    # floor below -- so a zero-byte margin here is refused too, for the same
+    # reason: a gate guarding against a silent, catastrophic overwrite should
+    # not shrug at "just touches, doesn't cross". If anything this boundary
+    # deserves less trust than the table base: __crt_stack_size is z88dk's
+    # *configured* stack allowance, not measured high-water use, so the stack
+    # floor is an estimate, not an exact constant. Do not relax this to `>`.
     highest = max(rep.table_end, trampoline_end)
-    if highest > rep.stack_floor:
+    if highest == rep.stack_floor:
+        rep.fail(
+            "IM2 data reaches exactly the stack floor 0x%04X, leaving no "
+            "margin: the gate refuses a zero-byte margin "
+            "(SP 0x%04X minus %d bytes of stack)"
+            % (rep.stack_floor, symbols["__register_sp"], symbols["__crt_stack_size"])
+        )
+    elif highest > rep.stack_floor:
         rep.fail(
             "IM2 data reaches 0x%04X, past the stack floor 0x%04X "
             "(SP 0x%04X minus %d bytes of stack)"
