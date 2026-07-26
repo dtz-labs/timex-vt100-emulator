@@ -124,6 +124,63 @@ static void test_render_cell_space(void)
     CHECK(out[7] == 0);
 }
 
+/*
+ * Cell geometry. 80 cells of 6 px are centred in the 512-px line, so cell 0
+ * starts at pixel 16 (byte 2) and cell 79 ends at pixel 495 (byte 61). The bit
+ * phase repeats every four columns; two of the four phases spill into the next
+ * byte.
+ */
+static void test_cell_span_phases(void)
+{
+    u8 b, sh, m0, m1;
+
+    render_cell_span(0, &b, &sh, &m0, &m1);
+    CHECK(b == 2 && sh == 0 && m0 == 0xFC && m1 == 0x00);
+
+    render_cell_span(1, &b, &sh, &m0, &m1);
+    CHECK(b == 2 && sh == 6 && m0 == 0x03 && m1 == 0xF0);
+
+    render_cell_span(2, &b, &sh, &m0, &m1);
+    CHECK(b == 3 && sh == 4 && m0 == 0x0F && m1 == 0xC0);
+
+    render_cell_span(3, &b, &sh, &m0, &m1);
+    CHECK(b == 4 && sh == 2 && m0 == 0x3F && m1 == 0x00);
+
+    /* The phase, not the byte, is what repeats: cell 4 is byte 5, phase 0. */
+    render_cell_span(4, &b, &sh, &m0, &m1);
+    CHECK(b == 5 && sh == 0 && m0 == 0xFC && m1 == 0x00);
+}
+
+/* The last cell must stay inside the line, leaving bytes 62 and 63 as margin. */
+static void test_cell_span_last_column(void)
+{
+    u8 b, sh, m0, m1;
+
+    render_cell_span(79, &b, &sh, &m0, &m1);
+    CHECK(b == 61 && sh == 2 && m0 == 0x3F && m1 == 0x00);
+}
+
+/* Every cell owns exactly six pixels, and never reaches past byte 61. */
+static void test_cell_span_covers_six_pixels(void)
+{
+    u8 col;
+
+    for (col = 0; col < 80u; ++col) {
+        u8 b, sh, m0, m1;
+        u8 bits = 0;
+        u8 i;
+
+        render_cell_span(col, &b, &sh, &m0, &m1);
+        for (i = 0; i < 8u; ++i) {
+            if (m0 & (u8)(1u << i)) { ++bits; }
+            if (m1 & (u8)(1u << i)) { ++bits; }
+        }
+        CHECK(bits == 6);
+        CHECK(b >= 2u);
+        CHECK((m1 != 0) ? (b + 1u <= 61u) : (b <= 61u));
+    }
+}
+
 int main(void)
 {
     test_render_cell_normal();
@@ -133,6 +190,9 @@ int main(void)
     test_render_cell_graphics();
     test_render_cell_invalid();
     test_render_cell_space();
+    test_cell_span_phases();
+    test_cell_span_last_column();
+    test_cell_span_covers_six_pixels();
 
     printf("render: %d checks passed\n", checks);
     return 0;

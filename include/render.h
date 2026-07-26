@@ -26,6 +26,25 @@
 #define ATTR_UNDERLINE 0x02u
 
 /*
+ * Screen geometry. 80 cells of 6 px are centred in the 512-px hi-res line:
+ * a 16-px (2-byte) margin each side, cells occupying scanline bytes 2..61.
+ * The margin is chosen byte-aligned so column 0 starts on a byte boundary.
+ */
+#define RENDER_LEFT_MARGIN_PX 16u
+#define RENDER_CELL_PX        6u
+
+/*
+ * Where cell `col` lives inside a scanline.
+ * byte_idx: scanline byte (0..63) holding the cell's leftmost pixel.
+ * sh:       right shift taking a glyph byte (cell in bits 7..2) into place.
+ * mask0:    bits this cell owns inside byte_idx.
+ * mask1:    bits it owns inside byte_idx + 1; zero when the cell does not spill.
+ *
+ * PURE logic: host-tested, must not include z80.h.
+ */
+void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1);
+
+/*
  * Produce 8 pixel row bytes for a single cell.
  * ch: character code (ASCII 0x20-0x7E or graphics 0xDF-0xFE).
  * attr: ATTR_* bits (0 = normal, ATTR_REVERSE = invert, ATTR_UNDERLINE = bottom row).

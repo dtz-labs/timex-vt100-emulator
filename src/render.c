@@ -33,6 +33,18 @@ void render_cell_bytes(u8 ch, u8 attr, u8 out[8])
     }
 }
 
+/* PURE: locate one cell inside a scanline. */
+void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
+{
+    u16 px = (u16)(RENDER_LEFT_MARGIN_PX + RENDER_CELL_PX * (u16)col);
+    u8 s = (u8)(px & 7u);
+
+    *byte_idx = (u8)(px >> 3);
+    *sh = s;
+    *mask0 = (u8)(0xFCu >> s);
+    *mask1 = (s > 2u) ? (u8)((0xFCu << (8u - s)) & 0xFFu) : 0u;
+}
+
 /* Hardware: blit dirty rows to display. */
 static void render_cell_to(u8 *dst[8], u8 bx, u8 ch, u8 attr)
 {
