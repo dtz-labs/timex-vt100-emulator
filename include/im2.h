@@ -22,15 +22,15 @@
 #ifndef IM2_H
 #define IM2_H
 
-#define IM2_TABLE_BASE 0xD300
-#define IM2_TABLE_FILL 0xD4
-#define IM2_TRAMPOLINE 0xD4D4
+#define IM2_TABLE_BASE 0xF900
+#define IM2_TABLE_FILL 0xFA
+#define IM2_TRAMPOLINE 0xFAFA
 
 /* Value loaded into the I register: the table base's high byte. Kept as its
  * own macro (not an expression) because the installer's inline asm needs a
  * plain literal -- the preprocessor cannot compute ">> 8" into an asm operand.
  * The check below keeps it from drifting away from IM2_TABLE_BASE. */
-#define IM2_VECTOR_PAGE 0xD3
+#define IM2_VECTOR_PAGE 0xF9
 
 /* The table must be 256-byte aligned and the trampoline must be where the
  * vector read lands, or interrupts jump into nothing. Checked at compile time

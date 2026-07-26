@@ -300,23 +300,23 @@ not a copy-and-adjust job. The 40-column figures are extrapolations from the
 
 ## 8. Memory map and the IM2 hazard
 
-Measured from `build/term_CODE.bin` (19,800 bytes) of the current 64-column
-build:
+Measured from `build/term.map` of the current 80-column build:
 
 ```
 0x4000  display file        (ULA bitmap / hi-res even columns)
 0x5800  attributes          (used by the ZX build, unused in hi-res)
 0x6000  hi-res odd columns  (free RAM on a Spectrum — no conflict)
 0x8000  program start (ORG)
-0xCD58  end of image
-        1448 bytes free
-0xD300  IM2 vector table, I = 0xD3                      <- hardcoded in main.c
-        257 bytes are architecturally required (0xD300-0xD400); the code
+0xCF1C  end of image (__BSS_END_tail)
+        10,724 bytes free
+0xF900  IM2 vector table, I = 0xF9                      <- IM2_TABLE_BASE / IM2_VECTOR_PAGE in include/im2.h
+        257 bytes are architecturally required (0xF900-0xFA00); the code
         actually writes 258 (seeds one byte, then LDIR with BC=257), so
-        it touches 0xD300-0xD401. The gate must use the real footprint.
-0xD4D4  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- hardcoded in main.c
-        0xD4D7-0xFFFF = 11,049 bytes free, shared with the stack
-0xFFFF  stack seed
+        it touches 0xF900-0xFA01. The gate must use the real footprint.
+0xFAFA  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- IM2_TRAMPOLINE in include/im2.h
+        0xFAFD-0xFD57 = 603 bytes free, clear of the stack
+0xFD58  stack floor (__register_sp 0xFF58 minus __crt_stack_size 0x0200)
+0xFF58  stack seed
 ```
 
 The terminal uses IM2 so the keyboard is sampled 50 times a second and buffered;
@@ -326,17 +326,18 @@ keystrokes.
 Two hazards follow, and both are addressed by D23:
 
 1. **Silent overwrite.** Neither address is known to the linker. An image that
-   grows past `0xD300` links cleanly and then destroys itself during IM2 setup.
-   `tools/check_image_limit.py` reads the map, compares the end of the image
-   (including BSS) against the table base, and fails the build. It also checks
-   the **other** side — that the table and trampoline clear the stack — because
-   after relocation both live in the region the stack grows down into. Wired
-   into `make tap`, `make tap-zx`, and CI.
-2. **An artificially small margin.** Relocating the table into the 11 KB above
-   the trampoline raises the margin from 1448 bytes to several kilobytes.
+   grows past the table base links cleanly and then destroys itself during IM2
+   setup. `tools/check_image_limit.py` reads the map, compares the end of the
+   image (including BSS) against the table base, and fails the build. It also
+   checks the **other** side — that the table and trampoline clear the stack —
+   because after relocation both live in the region the stack grows down into.
+   Wired into `make tap`, `make tap-zx`, and CI.
+2. **An artificially small margin.** The table originally sat at `0xD300`, right
+   above the image, leaving only about 1,000 bytes of headroom while roughly
+   11 KB between the trampoline and the stack sat unused. Relocating the table
+   raises the image margin to several kilobytes.
 
-   The address is measured in milestone 1, but it is not free choice — it must
-   satisfy all of:
+   The address is not free choice — it must satisfy all of:
 
    - the table base is `I << 8`, so it is 256-byte aligned;
    - the table is 257 bytes of one repeated value `X`, so any vector read yields
@@ -345,16 +346,22 @@ Two hazards follow, and both are addressed by D23:
    - both must clear the stack, which lives in the same free region, with margin
      for its high-water mark.
 
-   The base becomes a single named constant shared by the assembly and the gate
-   script, so the two can never disagree.
+   The base becomes a single named constant (`include/im2.h`), shared by the
+   assembly and the gate script, so the two can never disagree.
 
-**The 1448-byte figure is from the 64-column build on `master`.** The 80-column
-build is larger — `row_glyphs[80]`, `row_attrs[80]`, and `row_pixels[80]` alone
-add **320 bytes** of BSS before any code growth (160 bytes of pointers plus 80
-attribute bytes plus 80 pixel bytes, as `src/render.c` states in its own comment).
-The review quotes 240 bytes because it costed the two arrays in the plan; the
-landed code has three. The first implementation task must **measure** the real
-margin on the baseline branch before anything is added to it.
+   **Chosen values:** base `0xF900` (`I = 0xF9`), fill `0xFA`, trampoline
+   `0xFAFA`, stack floor `0xFD58`, clearance `603` bytes above the trampoline
+   and below the stack floor. This moves the table above the image entirely,
+   growing the image margin from about 1,000 bytes to roughly 10,700 bytes —
+   verified on the target (ZEsarUX via ZRCP): table contents, the `JP` opcode at
+   the trampoline, `I=F9`, and a keypress reaching the screen through the
+   relocated interrupt.
+
+**The margin figures above are measured on this branch**, which already carries
+the 80-column build. `row_glyphs[80]`, `row_attrs[80]`, and `row_pixels[80]`
+account for the growth over the older 64-column `master` figure of 1,448 bytes;
+the real pre-relocation margin on this branch measures about 1,000 bytes, which
+is what motivates the move in this section rather than the older number.
 
 ---
 
