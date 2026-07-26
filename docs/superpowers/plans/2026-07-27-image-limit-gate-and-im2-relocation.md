@@ -341,7 +341,7 @@ if __name__ == "__main__":
 python3 test/test_check_image_limit.py
 ```
 
-Expected: `check_image_limit: 11 checks passed`.
+Expected: `check_image_limit: 13 checks passed` (3 + 2 + 2 + 2 + 2 + 2).
 
 - [ ] **Step 5: Wire the gate into the Makefile**
 
@@ -404,7 +404,7 @@ make tap
 ```
 
 Expected: `make host-test` ends with the host suite passing plus
-`check_image_limit: 11 checks passed`. `make tap` ends with a line of the form
+`check_image_limit: 13 checks passed`. `make tap` ends with a line of the form
 `image ends 0x…… | IM2 table 0xD300..0xD401 | trampoline 0xD4D4 | stack floor 0xFD58 | margin N bytes`.
 
 **Record the reported margin — this is the spec's milestone-1 measurement.**
@@ -626,14 +626,15 @@ section admit few candidates. `0xF900` as the base gives `I = 0xF9`; filling wit
 bytes of clearance. The image may then run to `0xF900`, a margin of about 10,600
 bytes against a current image ending near `0xCD58`.
 
-- [ ] **Step 1: Prove the gate rejects the move before the values are consistent**
+- [ ] **Step 1: Prove the compile-time check actually fires**
 
-Confirm the compile-time checks fire, so a half-finished edit cannot build.
-Temporarily set only the base in `include/im2.h`:
+An assertion that has never fired is not known to work. Temporarily set an
+**inconsistent** pair in `include/im2.h` — a fill of `0xFA` with the old
+trampoline, which violates `trampoline == 0x0101 * fill`:
 
 ```c
 #define IM2_TABLE_BASE 0xF900
-#define IM2_TABLE_FILL 0xD4
+#define IM2_TABLE_FILL 0xFA
 #define IM2_TRAMPOLINE 0xD4D4
 ```
 
@@ -644,13 +645,15 @@ make tap
 ```
 
 Expected: compilation fails with
-`#error "IM2_TRAMPOLINE must equal 0x0101 * IM2_TABLE_FILL"` — no, it will not,
-because that pair is still self-consistent. What this configuration actually
-proves is the *other* check: the trampoline at `0xD4D4` now sits far below the
-table at `0xF900`, and nothing forbids that, so the build succeeds and the
-program breaks at runtime. **This is the case the compile-time checks cannot
-catch**, which is why all three values move together in Step 2 and why Step 4
-verifies `I` on the target. Revert this experiment before continuing.
+`#error "IM2_TRAMPOLINE must equal 0x0101 * IM2_TABLE_FILL"`, and no TAP is
+produced. Revert the experiment before continuing.
+
+**What this does not catch, and why Step 4 exists.** A *consistent* pair placed
+at the wrong address — say fill `0xD4` and trampoline `0xD4D4` with the table
+moved to `0xF900` — satisfies both compile-time checks and still breaks at
+runtime, because the vector read at `0xF9xx` would return whatever happens to be
+in memory there rather than `0xD4`. No preprocessor check can see that. Only
+reading `I` and the table contents on the target can, which is Step 4.
 
 - [ ] **Step 2: Move all three values together**
 
@@ -735,8 +738,9 @@ names in `REQUIRED`, which are the names the test writes into its synthetic maps
 The Makefile variables `IM2_TABLE_BASE` / `IM2_TABLE_FILL` are introduced in
 Task 1, re-derived in Task 2, and consumed unchanged in Task 3.
 
-**One honest gap.** Task 3 Step 1 is written as an experiment that *fails to
-prove what it first appears to* — the compile-time checks cannot catch a
-consistent-but-wrongly-placed trampoline. It is kept rather than deleted because
-the reasoning is what justifies the runtime verification in Step 4. An
-implementer who skips Step 1 loses nothing but that understanding.
+**Assertion coverage.** Task 3 Step 1 fires the `IM2_TRAMPOLINE` compile-time
+check with a genuinely inconsistent pair, so the assertion is proven to work
+rather than assumed to. The case it *cannot* catch — a self-consistent pair at
+the wrong address — is stated in the same step and is exactly what the target
+verification in Step 4 covers. Task 1 Step 7 does the same for the runtime gate,
+forcing a violation instead of trusting a check that has never failed.
