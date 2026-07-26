@@ -16,65 +16,64 @@ static int checks = 0;
 static void test_render_cell_normal(void)
 {
     u8 out[8];
-    render_cell_bytes('A', 0, out);  /* 'A', no attributes */
+    render_cell_bytes('A', 0, out);
 
-    /* 'A' from font: { 0x70, 0x88, 0x88, 0xF8, 0x88, 0x88, 0x88, 0x00 } */
-    CHECK(out[0] == 0x70);
-    CHECK(out[1] == 0x88);
+    /* 'A' from the TT3000 ROM: body in rows 1-6. */
+    CHECK(out[0] == 0x00);
+    CHECK(out[1] == 0x70);
     CHECK(out[2] == 0x88);
-    CHECK(out[3] == 0xF8);
-    CHECK(out[4] == 0x88);
+    CHECK(out[3] == 0x88);
+    CHECK(out[4] == 0xF8);
     CHECK(out[5] == 0x88);
     CHECK(out[6] == 0x88);
     CHECK(out[7] == 0x00);
 }
 
-/* REVERSE: all glyph bytes inverted (~). */
+/* REVERSE inverts the glyph. */
 static void test_render_cell_reverse(void)
 {
-    u8 out[8];
-    render_cell_bytes('A', ATTR_REVERSE, out);
+    u8 plain[8];
+    u8 rev[8];
+    u8 i;
 
-    CHECK(out[0] == (u8)~0x70);  /* 0x8F */
-    CHECK(out[1] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[2] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[3] == (u8)~0xF8);  /* 0x07 */
-    CHECK(out[4] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[5] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[6] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[7] == (u8)~0x00);  /* 0xFF */
+    render_cell_bytes('A', 0, plain);
+    render_cell_bytes('A', ATTR_REVERSE, rev);
+
+    for (i = 0; i < 8u; ++i) {
+        CHECK(rev[i] == (u8)~plain[i]);
+    }
 }
 
-/* UNDERLINE: bottom row set to 0xFF. */
+/* UNDERLINE fills the bottom row and leaves the rest alone. */
 static void test_render_cell_underline(void)
 {
-    u8 out[8];
-    render_cell_bytes('A', ATTR_UNDERLINE, out);
+    u8 plain[8];
+    u8 ul[8];
+    u8 i;
 
-    CHECK(out[0] == 0x70);
-    CHECK(out[1] == 0x88);
-    CHECK(out[2] == 0x88);
-    CHECK(out[3] == 0xF8);
-    CHECK(out[4] == 0x88);
-    CHECK(out[5] == 0x88);
-    CHECK(out[6] == 0x88);
-    CHECK(out[7] == 0xFF);  /* underline */
+    render_cell_bytes('A', 0, plain);
+    render_cell_bytes('A', ATTR_UNDERLINE, ul);
+
+    for (i = 0; i < 7u; ++i) {
+        CHECK(ul[i] == plain[i]);
+    }
+    CHECK(ul[7] == 0xFF);
 }
 
-/* REVERSE + UNDERLINE: inverted + bottom row 0xFF. */
+/* REVERSE + UNDERLINE: underline wins on the bottom row. */
 static void test_render_cell_reverse_underline(void)
 {
-    u8 out[8];
-    render_cell_bytes('A', ATTR_REVERSE | ATTR_UNDERLINE, out);
+    u8 plain[8];
+    u8 both[8];
+    u8 i;
 
-    CHECK(out[0] == (u8)~0x70);  /* 0x8F */
-    CHECK(out[1] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[2] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[3] == (u8)~0xF8);  /* 0x07 */
-    CHECK(out[4] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[5] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[6] == (u8)~0x88);  /* 0x77 */
-    CHECK(out[7] == 0xFF);      /* underline set after reverse */
+    render_cell_bytes('A', 0, plain);
+    render_cell_bytes('A', (u8)(ATTR_REVERSE | ATTR_UNDERLINE), both);
+
+    for (i = 0; i < 7u; ++i) {
+        CHECK(both[i] == (u8)~plain[i]);
+    }
+    CHECK(both[7] == 0xFF);
 }
 
 /* DEC graphics: 0xF1 (0x71 | 0x80, q) maps to a horizontal line. */

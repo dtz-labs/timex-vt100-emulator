@@ -29,30 +29,47 @@ static void test_space(void)
     CHECK(g[4] == 0 && g[5] == 0 && g[6] == 0 && g[7] == 0);
 }
 
-/* 'A' (0x41) is at index 0x41 - 0x20 = 0x21 = 33 in FONT_ASCII. */
+/* 'A' from the TT3000 ROM: body in rows 1-6, cell in bits 7..2. */
 static void test_glyph_A(void)
 {
     const u8 *g = font_glyph(0x41);  /* 'A' */
-    /* From genfont.py: 'A': [".###....", "#...#...", "#...#...", "#####...",
-     *                        "#...#...", "#...#...", "#...#...", "........"] */
-    CHECK(g[0] == 0x70);  /* .###.... = 01110000 */
-    CHECK(g[1] == 0x88);  /* #...#... = 10001000 */
-    CHECK(g[2] == 0x88);  /* #...#... = 10001000 */
-    CHECK(g[3] == 0xF8);  /* #####... = 11111000 */
-    CHECK(g[4] == 0x88);  /* #...#... = 10001000 */
-    CHECK(g[5] == 0x88);  /* #...#... = 10001000 */
-    CHECK(g[6] == 0x88);  /* #...#... = 10001000 */
-    CHECK(g[7] == 0x00);  /* ........ = 00000000 */
+    CHECK(g[0] == 0x00);  /* ...... */
+    CHECK(g[1] == 0x70);  /* .###.. */
+    CHECK(g[2] == 0x88);  /* #...#. */
+    CHECK(g[3] == 0x88);  /* #...#. */
+    CHECK(g[4] == 0xF8);  /* #####. */
+    CHECK(g[5] == 0x88);  /* #...#. */
+    CHECK(g[6] == 0x88);  /* #...#. */
+    CHECK(g[7] == 0x00);  /* ...... */
 }
 
-/* '~' (0x7E) is last in ASCII range. */
+/* '~' (0x7E) is the last ASCII entry. */
 static void test_glyph_tilde(void)
 {
     const u8 *g = font_glyph(0x7E);  /* '~' */
-    /* From genfont.py: "~": [".#..#...", "#.#.#...", "#..#....", "........", ...] */
-    CHECK(g[0] == 0x48);  /* .#..#... = 01001000 */
-    CHECK(g[1] == 0xA8);  /* #.#.#... = 10101000 */
-    CHECK(g[2] == 0x90);  /* #..#.... = 10010000 */
+    CHECK(g[0] == 0x00);
+    CHECK(g[1] == 0x50);  /* .#.#.. */
+    CHECK(g[2] == 0xA0);  /* #.#... */
+    CHECK(g[3] == 0x00);
+}
+
+/*
+ * At 6-px pitch a cell owns bits 7..2 only. A glyph that lights bit 1 or bit 0
+ * would bleed into its right-hand neighbour, which reads as a renderer bug
+ * rather than a font bug. Check the whole ASCII page, not a sample.
+ */
+static void test_no_glyph_exceeds_six_pixels(void)
+{
+    unsigned code;
+
+    for (code = 0x20u; code <= 0x7Eu; ++code) {
+        const u8 *g = font_glyph((u8)code);
+        u8 i;
+
+        for (i = 0; i < 8u; ++i) {
+            CHECK((g[i] & 0x03u) == 0);
+        }
+    }
 }
 
 static void check_glyph(const u8 *g, const u8 want[8])
@@ -118,6 +135,7 @@ int main(void)
     test_space();
     test_glyph_A();
     test_glyph_tilde();
+    test_no_glyph_exceeds_six_pixels();
     test_glyph_graph_lines();
     test_glyph_graph_0x7E();
     test_invalid_low();
