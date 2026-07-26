@@ -58,11 +58,33 @@ static void test_glyph_tilde(void)
  * would bleed into its right-hand neighbour, which reads as a renderer bug
  * rather than a font bug. Check the whole ASCII page, not a sample.
  */
-static void test_no_glyph_exceeds_six_pixels(void)
+static void test_no_glyph_exceeds_six_pixels_ascii(void)
 {
     unsigned code;
 
     for (code = 0x20u; code <= 0x7Eu; ++code) {
+        const u8 *g = font_glyph((u8)code);
+        u8 i;
+
+        for (i = 0; i < 8u; ++i) {
+            CHECK((g[i] & 0x03u) == 0);
+        }
+    }
+}
+
+/*
+ * Same containment property, but for the DEC graphics page (0xDF-0xFE). This
+ * page is hand-authored pixel art in tools/genfont.py, which has no equivalent
+ * of romfont.py's check_pitch() abort -- row_byte() there slices s[:8] and
+ * silently accepts a 7- or 8-character pattern row, so this is the only place
+ * that would ever catch a GRAPH entry that overruns its 6-px cell. Split from
+ * the ASCII check above so a failing assertion names the page it failed in.
+ */
+static void test_no_glyph_exceeds_six_pixels_graph(void)
+{
+    unsigned code;
+
+    for (code = 0xDFu; code <= 0xFEu; ++code) {
         const u8 *g = font_glyph((u8)code);
         u8 i;
 
@@ -124,6 +146,8 @@ static void test_glyph_graph_0x7E(void)
     CHECK(g[3] == 0x30);  /* ..##.. */
     CHECK(g[4] == 0x30);  /* ..##.. */
     CHECK(g[5] == 0x00);
+    CHECK(g[6] == 0x00);
+    CHECK(g[7] == 0x00);
 }
 
 /* Invalid code below ASCII range returns blank. */
@@ -148,7 +172,8 @@ int main(void)
     test_space();
     test_glyph_A();
     test_glyph_tilde();
-    test_no_glyph_exceeds_six_pixels();
+    test_no_glyph_exceeds_six_pixels_ascii();
+    test_no_glyph_exceeds_six_pixels_graph();
     test_glyph_graph_lines();
     test_graph_half_lines_join();
     test_glyph_graph_cross();

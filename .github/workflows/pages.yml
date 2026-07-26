@@ -61,6 +61,7 @@ jobs:
           mkdir -p _site
           cp -R site/. _site/
           cp -R _emulator/dist/jsspeccy _site/jsspeccy
+          cp _emulator/dist/COPYING _site/jsspeccy/COPYING
           cp build/term.tap _site/term.tap
 
       - name: Check the pieces the page needs are all there
@@ -71,6 +72,7 @@ jobs:
           test -f _site/jsspeccy/jsspeccy.js
           test -f _site/jsspeccy/jsspeccy-worker.js
           test -f _site/jsspeccy/jsspeccy-core.wasm
+          test -f _site/jsspeccy/COPYING
           test -f _site/jsspeccy/roms/tc2048.rom
           test -f _site/jsspeccy/tapeloaders/tape_2048.szx
 

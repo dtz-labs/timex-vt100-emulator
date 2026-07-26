@@ -97,15 +97,17 @@ void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
  * Glyph lookup is hoisted out of the scanline loop on purpose: doing it inside
  * would cost 640 lookups per row instead of 80.
  *
- * row_glyphs/row_attrs are file-scope, not locals, to keep 240 bytes (80
- * pointers + 80 attribute bytes) off the Z80 stack. That is safe because
- * render_flush -- the only caller of render_row_fast -- runs from the main
- * loop only; it is never reached from the IM2 keyboard handler
- * (keyboard_im2_isr -> keyboard_frame_tick reaches only keymap_poll and
- * keybuf_write), so there is no reentrancy hazard in sharing this storage.
+ * row_glyphs/row_attrs/row_pixels are file-scope, not locals, to keep 320
+ * bytes (80 pointers + 80 attribute bytes + 80 pixel bytes) off the Z80
+ * stack. That is safe because render_flush -- the only caller of
+ * render_row_fast -- runs from the main loop only; it is never reached from
+ * the IM2 keyboard handler (keyboard_im2_isr -> keyboard_frame_tick reaches
+ * only keymap_poll and keybuf_write), so there is no reentrancy hazard in
+ * sharing this storage.
  */
 static const u8 *row_glyphs[COLS];
 static u8 row_attrs[COLS];
+static u8 row_pixels[COLS];
 
 static void render_row_fast(const screen_t *s, u8 r)
 {
@@ -130,12 +132,10 @@ static void render_row_fast(const screen_t *s, u8 r)
     }
 
     for (i = 0; i < 8u; ++i) {
-        u8 g[COLS];
-
         for (col = 0; col < COLS; ++col) {
-            g[col] = glyph_row_byte(row_glyphs[col], row_attrs[col], i);
+            row_pixels[col] = glyph_row_byte(row_glyphs[col], row_attrs[col], i);
         }
-        render_row_bytes(g, even_dst[i], odd_dst[i]);
+        render_row_bytes(row_pixels, even_dst[i], odd_dst[i]);
     }
 }
 

@@ -49,7 +49,8 @@ JSSpeccy&nbsp;3</a>, which adds the TC2048 and TC2068; stock JSSpeccy has no
 Timex video modes. TAPs are also in the
 <a href="https://github.com/dtz-labs/timex-vt100-emulator/releases">releases</a>.</p>
 <p class="footer">Emulation by
-<a href="https://github.com/gasman/jsspeccy3">JSSpeccy&nbsp;3</a> (GPL-3), in the
+<a href="https://github.com/gasman/jsspeccy3">JSSpeccy&nbsp;3</a>
+(<a href="jsspeccy/COPYING">GPL-3</a>), in the
 <a href="https://github.com/dtz-labs/jsspeccy3">dtz-labs fork</a> with Timex support.</p>
 <script src="jsspeccy/jsspeccy.js"></script>
 <script>
@@ -60,7 +61,14 @@ JSSpeccy(document.getElementById('jsspeccy'), {
     // No autoStart: JSSpeccy builds its AudioContext inside start() and never
     // calls resume(), so starting from the visible play button keeps it inside
     // a user gesture -- the only way browsers allow audio (the terminal's BEL).
-    zoom: 2
+    zoom: 2,
+    // sandbox only gates drag-and-drop, File > Open..., File > Find games...
+    // (an archive.org search/fetch we don't want on this page), the
+    // "Auto-load tapes" menu toggle, and the toolbar "Open file" button --
+    // verified against the shipped jsspeccy.js for this release. The toolbar
+    // Reset button and the (Un)pause play button are added unconditionally,
+    // so the page's "Press the button to start" instruction still holds.
+    sandbox: true
 });
 </script>
 </body>
