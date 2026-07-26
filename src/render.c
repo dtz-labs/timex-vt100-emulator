@@ -56,14 +56,53 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
 }
 
 /*
+ * PURE: pack one full scanline into the two 32-byte display-file rows that
+ * hold it.
+ *
+ * Cells are walked in groups of eight because eight cells span six bytes,
+ * which is three CONSECUTIVE indices in each display file -- so both files
+ * are written sequentially with no parity test in the loop.
+ *
+ * g80: COLS attribute-applied glyph bytes for one scanline (cell in bits
+ *      7..2), left to right.
+ * ev, od: the 32-byte destination rows for the even (file0) and odd (file1)
+ *         display files; margin indices 0 and 31 are left untouched.
+ */
+void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
+{
+    u8 j;
+
+    for (j = 0; j < 10u; ++j) {
+        u8 base = (u8)(j * 8u);   /* first cell of this group          */
+        u8 fi = (u8)(1u + j * 3u); /* first file index of this group    */
+        u8 packed[3];
+
+        /* Scanline bytes 2+6j .. 4+6j. */
+        render_pack4(&g80[base], packed);
+        ev[fi] = packed[0];
+        od[fi] = packed[1];
+        ev[fi + 1u] = packed[2];
+
+        /* Scanline bytes 5+6j .. 7+6j. */
+        render_pack4(&g80[base + 4u], packed);
+        od[fi + 1u] = packed[0];
+        ev[fi + 2u] = packed[1];
+        od[fi + 2u] = packed[2];
+    }
+}
+
+/*
  * Blit one text row.
  *
  * Glyph lookup is hoisted out of the scanline loop on purpose: doing it inside
  * would cost 640 lookups per row instead of 80.
  *
- * Cells are walked in groups of eight because eight cells span six bytes, which
- * is three CONSECUTIVE indices in each display file -- so both files are written
- * sequentially with no parity test in the inner loop.
+ * row_glyphs/row_attrs are file-scope, not locals, to keep 240 bytes (80
+ * pointers + 80 attribute bytes) off the Z80 stack. That is safe because
+ * render_flush -- the only caller of render_row_fast -- runs from the main
+ * loop only; it is never reached from the IM2 keyboard handler
+ * (keyboard_im2_isr -> keyboard_frame_tick reaches only keymap_poll and
+ * keybuf_write), so there is no reentrancy hazard in sharing this storage.
  */
 static const u8 *row_glyphs[COLS];
 static u8 row_attrs[COLS];
@@ -73,7 +112,7 @@ static void render_row_fast(const screen_t *s, u8 r)
     u8 *even_dst[8];
     u8 *odd_dst[8];
     const cell_t *cell = &s->cells[r][0];
-    u8 col, i, j;
+    u8 col, i;
 
     for (col = 0; col < COLS; ++col) {
         row_glyphs[col] = font_glyph(cell->ch);
@@ -91,32 +130,12 @@ static void render_row_fast(const screen_t *s, u8 r)
     }
 
     for (i = 0; i < 8u; ++i) {
-        u8 *ev = even_dst[i];
-        u8 *od = odd_dst[i];
+        u8 g[COLS];
 
-        for (j = 0; j < 10u; ++j) {
-            u8 base = (u8)(j * 8u);   /* first cell of this group          */
-            u8 fi = (u8)(1u + j * 3u); /* first file index of this group    */
-            u8 g[8];
-            u8 packed[3];
-            u8 k;
-
-            for (k = 0; k < 8u; ++k) {
-                g[k] = glyph_row_byte(row_glyphs[base + k], row_attrs[base + k], i);
-            }
-
-            /* Scanline bytes 2+6j .. 4+6j. */
-            render_pack4(&g[0], packed);
-            ev[fi] = packed[0];
-            od[fi] = packed[1];
-            ev[fi + 1u] = packed[2];
-
-            /* Scanline bytes 5+6j .. 7+6j. */
-            render_pack4(&g[4], packed);
-            od[fi + 1u] = packed[0];
-            ev[fi + 2u] = packed[1];
-            od[fi + 2u] = packed[2];
+        for (col = 0; col < COLS; ++col) {
+            g[col] = glyph_row_byte(row_glyphs[col], row_attrs[col], i);
         }
+        render_row_bytes(g, even_dst[i], odd_dst[i]);
     }
 }
 

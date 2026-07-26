@@ -248,6 +248,58 @@ static void test_pack4_no_gaps(void)
 }
 
 /*
+ * render_row_bytes is the one piece of the 80-column blitter with real risk
+ * (the fi = 1 + j*3 group-index arithmetic) and no other host coverage, since
+ * render_row_fast itself writes absolute video-RAM addresses that only exist
+ * on target. Build one full scanline -- all four bit phases, a blank cell,
+ * and a fully-lit cell -- and check it against paint_reference exactly like
+ * test_pack4_matches_reference does for a single group of four.
+ */
+static void test_row_bytes_matches_reference(void)
+{
+    static const u8 pattern[4] = { 0xFC, 0xA8, 0x54, 0x84 };
+    u8 g80[80];
+    u8 want[64];
+    u8 ev[32], od[32];
+    u8 col, b;
+
+    for (col = 0; col < 80u; ++col) {
+        if (col == 5u) {
+            g80[col] = 0x00;  /* blank cell */
+        } else if (col == 6u) {
+            g80[col] = 0xFC;  /* fully-lit cell */
+        } else {
+            g80[col] = pattern[col % 4u];  /* cycles through all four phases */
+        }
+    }
+
+    paint_reference(g80, 80u, want);
+
+    /* Sentinel the destinations so an out-of-range write is caught too. */
+    for (b = 0; b < 32u; ++b) {
+        ev[b] = 0xAA;
+        od[b] = 0xAA;
+    }
+
+    render_row_bytes(g80, ev, od);
+
+    /* Scanline byte 2b lives in the even file at index b, byte 2b+1 in the odd
+     * file at the same index -- de-interleave paint_reference's output to
+     * compare against render_row_bytes' two 32-byte rows. */
+    for (b = 1; b < 31u; ++b) {
+        CHECK(ev[b] == want[b * 2u]);
+        CHECK(od[b] == want[b * 2u + 1u]);
+    }
+
+    /* The 16-px margins (scanline bytes 0,1 and 62,63) are index 0 and 31 in
+     * both files and must be left untouched by the packer. */
+    CHECK(ev[0] == 0xAA);
+    CHECK(od[0] == 0xAA);
+    CHECK(ev[31] == 0xAA);
+    CHECK(od[31] == 0xAA);
+}
+
+/*
  * No attribute may light bits 1..0 -- those belong to the cell on the right.
  * Reverse is the dangerous one: inverting a whole byte sets them every time.
  */
@@ -282,6 +334,7 @@ int main(void)
     test_pack4_matches_reference();
     test_pack4_isolation();
     test_pack4_no_gaps();
+    test_row_bytes_matches_reference();
     test_attributes_stay_inside_the_cell();
 
     printf("render: %d checks passed\n", checks);

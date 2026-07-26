@@ -55,6 +55,19 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1);
 void render_pack4(const u8 *g, u8 *out3);
 
 /*
+ * Pack one full scanline into the two 32-byte display-file rows that hold it.
+ * g80: COLS attribute-applied glyph bytes for one scanline, cell in bits 7..2,
+ *      left to right (as produced by render_cell_bytes/glyph_row_byte per cell).
+ * ev, od: the 32-byte destination rows for the even (file0) and odd (file1)
+ *         display files; margin indices 0 and 31 are left untouched.
+ *
+ * Cells are grouped in eights because eight cells (48 px) span six scanline
+ * bytes, which is three consecutive indices in each display file.
+ * PURE logic: host-tested, must not include z80.h.
+ */
+void render_row_bytes(const u8 *g80, u8 *ev, u8 *od);
+
+/*
  * Produce 8 pixel row bytes for a single cell.
  * ch: character code (ASCII 0x20-0x7E or graphics 0xDF-0xFE).
  * attr: ATTR_* bits (0 = normal, ATTR_REVERSE = invert, ATTR_UNDERLINE = bottom row).
