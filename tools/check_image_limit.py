@@ -77,11 +77,17 @@ def analyse(map_path, im2_base, im2_fill):
             % im2_base
         )
 
-    if rep.image_end >= im2_base:
+    if rep.image_end == im2_base:
+        rep.fail(
+            "image ends exactly at the IM2 table base 0x%04X, leaving no "
+            "margin: the gate refuses a zero-byte margin"
+            % im2_base
+        )
+    elif rep.image_end > im2_base:
         rep.fail(
             "image ends at 0x%04X, past the IM2 table base 0x%04X: "
             "interrupt setup would overwrite %d bytes of the program"
-            % (rep.image_end, im2_base, max(rep.image_end - im2_base, 0))
+            % (rep.image_end, im2_base, rep.image_end - im2_base)
         )
 
     if im2_base <= rep.trampoline < rep.table_end:

@@ -47,6 +47,21 @@ def test_fails_when_image_reaches_the_table():
         rep = cil.analyse(write_map(d, "$D300"), 0xD300, 0xD4)
         check(not rep.ok, "an image touching the table base fails")
         check(any("image" in p for p in rep.problems), "the problem names the image")
+        check(
+            not any("overwrite" in p for p in rep.problems),
+            "a zero-byte margin is not described as an overwrite",
+        )
+
+
+def test_fails_when_image_overlaps_the_table():
+    with tempfile.TemporaryDirectory() as d:
+        # Image ends 0x10 bytes past the table base: a real overlap, not a touch.
+        rep = cil.analyse(write_map(d, "$D310"), 0xD300, 0xD4)
+        check(not rep.ok, "an image overlapping the table fails")
+        check(
+            any("overwrite 16 bytes" in p for p in rep.problems),
+            "the problem reports the correct overwritten byte count",
+        )
 
 
 def test_fails_when_table_hits_the_stack():
@@ -76,6 +91,7 @@ def main():
     test_parses_symbols()
     test_ok_when_image_fits()
     test_fails_when_image_reaches_the_table()
+    test_fails_when_image_overlaps_the_table()
     test_fails_when_table_hits_the_stack()
     test_rejects_a_misaligned_table_base()
     test_table_and_trampoline_must_not_overlap()
