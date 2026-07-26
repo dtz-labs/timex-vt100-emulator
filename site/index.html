@@ -32,7 +32,7 @@
 <strong>80&times;24</strong> monochrome text on Timex hi-res 512&times;192 video,
 with the 6&times;8 font from the Timex Terminal TT3000 ROM. This page always runs
 the latest TAP built from
-<a href="https://github.com/dtz-labs/timex-vt100-emulator">master</a> on an
+<a href="https://github.com/dtz-labs/zx-vt102-terminal">master</a> on an
 emulated <strong>Timex TC2048</strong>.
 <span class="hint">Press the &#9654; button on the display to start.</span></p>
 <p>There is no host at the other end here, so the terminal runs in loopback: what
@@ -40,14 +40,14 @@ you type goes through the keyboard mapping, out to the connection layer, back in
 and through the VT parser onto the screen. That exercises the real path &mdash;
 it is a working terminal talking to itself. Attaching it to a shell over a
 WebSocket is
-<a href="https://github.com/dtz-labs/timex-vt100-emulator/issues/1">issue&nbsp;1</a>.</p>
+<a href="https://github.com/dtz-labs/zx-vt102-terminal/issues/1">issue&nbsp;1</a>.</p>
 <p class="keys">ENTER — CR &nbsp; CAPS+0 — backspace &nbsp; SYMBOL+SPACE — ESC
 &nbsp; CAPS+SYMBOL+letter — Ctrl-letter</p>
 <div id="jsspeccy"></div>
 <p>Timex video needs our <a href="https://github.com/dtz-labs/jsspeccy3">fork of
 JSSpeccy&nbsp;3</a>, which adds the TC2048 and TC2068; stock JSSpeccy has no
 Timex video modes. TAPs are also in the
-<a href="https://github.com/dtz-labs/timex-vt100-emulator/releases">releases</a>.</p>
+<a href="https://github.com/dtz-labs/zx-vt102-terminal/releases">releases</a>.</p>
 <p class="footer">Emulation by
 <a href="https://github.com/gasman/jsspeccy3">JSSpeccy&nbsp;3</a>
 (<a href="jsspeccy/COPYING">GPL-3</a>), in the

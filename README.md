@@ -1,17 +1,22 @@
-# Timex VT102 Terminal Emulator
+# ZX VT102 Terminal
 
-[![CI](https://github.com/dtz-labs/timex-vt100-emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/dtz-labs/timex-vt100-emulator/actions/workflows/ci.yml)
+[![CI](https://github.com/dtz-labs/zx-vt102-terminal/actions/workflows/ci.yml/badge.svg)](https://github.com/dtz-labs/zx-vt102-terminal/actions/workflows/ci.yml)
 
-**[▶ Run the terminal in your browser](https://dtz-labs.github.io/timex-vt100-emulator/)** —
+**[▶ Run the terminal in your browser](https://dtz-labs.github.io/zx-vt102-terminal/)** —
 every push to `master` deploys the current TAP to GitHub Pages, where it runs on
 an emulated Timex TC2048 in the [dtz-labs fork](https://github.com/dtz-labs/jsspeccy3)
 of [JSSpeccy 3](https://github.com/gasman/jsspeccy3) that adds Timex video.
 There is no host behind it, so the terminal runs in
 loopback: type and the bytes come back through the VT parser onto the screen.
-Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/timex-vt100-emulator/issues/1).
+Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/zx-vt102-terminal/issues/1).
 
 VT102-style terminal for Timex 2048/2068-class machines using Timex hi-res
 512x192 video for an 80x24 text display.
+
+A second target for the stock ZX Spectrum — 40x24 on ULA graphics with the same
+6-px font, built from the same source tree — is **designed but not yet
+implemented**; see
+[the design](docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md).
 
 The normal emulator workflow uses ZEsarUX plus its ZRCP remote protocol. The
 bridge can either connect the Timex terminal to a real Unix PTY/shell, or to
@@ -92,8 +97,8 @@ make release-build VERSION=0.1.0
 This creates:
 
 ```text
-dist/timex-vt100-emulator-0.1.0.tap
-dist/timex-vt100-emulator-0.1.0-if1.tap
+dist/zx-vt102-terminal-0.1.0.tap
+dist/zx-vt102-terminal-0.1.0-if1.tap
 ```
 
 GitHub releases are built from tags named `v*`, for example `v0.1.0`. The
