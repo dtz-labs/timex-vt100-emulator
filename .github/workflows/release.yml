@@ -37,13 +37,13 @@ jobs:
           set -eu
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp build/term.tap "dist/timex-vt100-emulator-${version}.tap"
-          cp build/term-if1.tap "dist/timex-vt100-emulator-${version}-if1.tap"
+          cp build/term.tap "dist/zx-vt102-terminal-${version}.tap"
+          cp build/term-if1.tap "dist/zx-vt102-terminal-${version}-if1.tap"
           tap_files=(dist/*.tap)
           test "${#tap_files[@]}" -eq 2
-          zip -j "dist/timex-vt100-emulator-${GITHUB_REF_NAME}-taps.zip" \
+          zip -j "dist/zx-vt102-terminal-${GITHUB_REF_NAME}-taps.zip" \
             "${tap_files[@]}"
-          unzip -l "dist/timex-vt100-emulator-${GITHUB_REF_NAME}-taps.zip"
+          unzip -l "dist/zx-vt102-terminal-${GITHUB_REF_NAME}-taps.zip"
 
       - name: Publish GitHub release
         env:

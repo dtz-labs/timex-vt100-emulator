@@ -13,7 +13,7 @@ IF1_TARGET ?= term-if1
 VERSION ?= 0.1.0
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GIT_COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
-RELEASE_NAME ?= timex-vt100-emulator-$(VERSION)
+RELEASE_NAME ?= zx-vt102-terminal-$(VERSION)
 
 Z88DK_COMMON_PREFIXES ?= \
 	$(HOME)/Programowanie/z88dk \

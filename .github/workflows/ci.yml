@@ -47,13 +47,13 @@ jobs:
             -e GIT_COMMIT="$git_commit" \
             z88dk/z88dk:latest make tap if1
           mkdir -p dist
-          cp build/term.tap dist/timex-vt100-emulator-ci.tap
-          cp build/term-if1.tap dist/timex-vt100-emulator-ci-if1.tap
+          cp build/term.tap dist/zx-vt102-terminal-ci.tap
+          cp build/term-if1.tap dist/zx-vt102-terminal-ci-if1.tap
           ls -l dist
 
       - name: Upload TAP artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: timex-vt100-emulator-taps
+          name: zx-vt102-terminal-taps
           path: dist/*.tap
           if-no-files-found: error
