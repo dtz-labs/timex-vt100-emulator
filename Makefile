@@ -86,6 +86,12 @@ MAP := $(APP).map
 IF1_APP := $(BUILD_DIR)/$(IF1_TARGET)
 IF1_TAP := $(IF1_APP).tap
 IF1_MAP := $(IF1_APP).map
+
+# IM2 vector table placement. main.c writes these addresses absolutely, so the
+# linker cannot know about them -- check_image_limit.py is what enforces them.
+IM2_TABLE_BASE ?= 0xD300
+IM2_TABLE_FILL ?= 0xD4
+CHECK_IMAGE_LIMIT = python3 tools/check_image_limit.py
 IF1_BAUD ?= RS_BAUD_9600
 IF1_DEFS ?= -DCONN_BACKEND_IF1 -DCONN_IF1_BAUD=$(IF1_BAUD)
 SERIAL ?=
@@ -124,11 +130,12 @@ test: host-test
 
 host-test:
 	CC="$(CC)" sh test/run.sh
+	python3 test/test_check_image_limit.py
 
 ci: host-test python-check terminfo-check
 
 python-check:
-	python3 -m py_compile tools/*.py test/zesarux_smoke.py
+	python3 -m py_compile tools/*.py test/zesarux_smoke.py test/test_check_image_limit.py
 
 terminfo-check: $(TERMINFO_SRC)
 	tic -c -x "$(TERMINFO_SRC)"
@@ -186,12 +193,14 @@ $(TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(SOURCES) -o "$(APP)" -create-app $(Z88DK_LDFLAGS)
+	@$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 
 $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(IF1_TAP)"
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(IF1_DEFS) $(SOURCES) -o "$(IF1_APP)" -create-app $(Z88DK_LDFLAGS)
+	@$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 
 $(BUILD_DIR):
 	@mkdir -p "$(BUILD_DIR)"
