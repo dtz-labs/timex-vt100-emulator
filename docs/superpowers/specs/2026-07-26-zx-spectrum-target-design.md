@@ -241,14 +241,27 @@ not a copy-and-adjust job. The 40-column figures are extrapolations from the
 5. **An inline `attr == 0` group path.** Detect attributes per group; only
    affected groups take the general path. No helper calls or temporary arrays in
    the normal loop.
+6. **A blank-row fast path.** A row whose cells are all blank with no attributes
+   is cleared blockwise instead of packed cell by cell. The review notes this
+   needs no additional font data.
+7. **`render_scroll_region()` stops clearing the dirty flags of the scrolled
+   region.** This is a hard prerequisite of items 2 and 3, not an optional extra:
+   the review shows that clearing the whole region discards changes that were
+   never in video RAM, and that `main.c` currently compensates by dirtying the
+   bottom row again. Item 2 removes that compensation, so this must land in the
+   same slice or deferred wrap will drop characters.
 
 **Explicitly out of scope**, deferred to their own slices:
 
-- The scroll/dirty **contract** defect (P0 in the review): `main.c` predicts
-  scrolls from raw bytes and misses the parser's VT, FF, `ESC D`, `ESC M`, and
-  `ESC E` paths, which can move stale pixels or an inverted cursor. This is a
-  correctness bug in existing code, not something this slice introduces. The
-  dirty-group migration must not make it worse, and it stays a known issue.
+- The remaining half of the scroll/dirty **contract** defect (P0 in the review):
+  `main.c` predicts scrolls from raw bytes and so misses the parser's VT, FF,
+  `ESC D`, `ESC M`, and `ESC E` paths, which can move stale pixels or an inverted
+  cursor. Items 2, 3, and 7 above implement four of the five steps of the
+  review's robust model; the fifth — removing the raw-byte prediction from
+  `main.c` and letting the parser drive every scroll — is deferred. This is a
+  pre-existing correctness bug, not one this slice introduces, but the split is
+  **uncomfortable and deliberate**: it is recorded as a risk in §11 rather than
+  presented as clean separation.
 - A Z80 assembly normal path.
 - A page-aligned scanline-major font (`FONT_SCANLINE[8][256]`), which the review
   itself gates behind the IM2 reservation.
@@ -293,9 +306,11 @@ Two hazards follow, and both are addressed by D23:
 
 **The 1448-byte figure is from the 64-column build on `master`.** The 80-column
 build is larger — `row_glyphs[80]`, `row_attrs[80]`, and `row_pixels[80]` alone
-add 240 bytes of BSS before any code growth. The first implementation task must
-**measure** the real margin on the baseline branch before anything is added to
-it.
+add **320 bytes** of BSS before any code growth (160 bytes of pointers plus 80
+attribute bytes plus 80 pixel bytes, as `src/render.c` states in its own comment).
+The review quotes 240 bytes because it costed the two arrays in the plan; the
+landed code has three. The first implementation task must **measure** the real
+margin on the baseline branch before anything is added to it.
 
 ---
 
@@ -348,6 +363,14 @@ name and the active geometry.
 scroll, and one video scroll. Results are committed as reference numbers and
 printed by CI, not enforced.
 
+This is a **deliberate reduction** of the harness the review asks for. The review
+specifies coverage of mixed attribute rows, blank rows, full repaint, both scroll
+directions, regions crossing the rows 7/8 and 15/16 third boundaries, arbitrary
+`n`, IL, DL, LF, VT, FF, deferred wrap, IND, RI, NEL, cursor hide/show, and stack
+high-water. What is kept here is the minimum needed to confirm the §7 numbers and
+the §7 extrapolation for 40 columns. The rest belongs with the contract fix that
+§7 defers, since most of those cases exist to test exactly that contract.
+
 **Build gate** (§8): image-limit check on every TAP target.
 
 ---
@@ -361,6 +384,7 @@ printed by CI, not enforced.
 | The 80-column image may already be close to the IM2 table; the known margin is from the 64-column build. | First implementation task measures it; the gate then makes any future overrun a build failure (§8). |
 | Two artifacts, and users may pick the wrong one. | The Spectrum TAP runs on both families, so it is the safe default. The Timex TAP refuses rather than showing garbage. |
 | The 40-column T-state figures are extrapolated, not measured. | The benchmark in §10 confirms them before the performance work is called done. |
+| **The scroll/dirty contract is split across two slices** (§7). This slice implements four of the five steps of the review's robust model and defers the fifth. The deferred piece — `main.c` predicting scrolls from raw bytes — is a P0 the review places *before* the packer work. | Item 7 in §7 is mandatory precisely because removing the `main.c` cursor-row dirtying without it would drop characters on deferred wrap. The residual defect is unchanged from today's behaviour, not worsened. If the deferred piece proves entangled during implementation, pull it in rather than working around it. |
 
 ---
 
@@ -380,13 +404,19 @@ assembly renderer; the page-aligned font; the scroll/dirty contract fix (§7).
 3. Split `render.c` into the shared core plus `render_hires.c`, and move the
    hardware paths into `blit_hires.c` and `video_hires.c`. No behaviour change;
    the existing tests must stay green.
-4. Add `machine_class.c` with host tests, then `machine.c` with the probes, the
+4. Apply the performance items from §7 to `screen.c` and `blit_hires.c`, and
+   record the 80-column benchmark numbers.
+5. Add `machine_class.c` with host tests, then `machine.c` with the probes, the
    guard, and the banner name.
-5. Add `render_ula.c` with host tests for span, packing, and containment.
-6. Add `blit_ula.c` and `video_ula.c`; add the `tap-zx` and `if1-zx` targets;
-   teach `test/run.sh` the second compile at `-DTERM_ZX`.
-7. Apply the performance items from §7 to both blitters and to `screen.c`.
+6. Add `render_ula.c` with host tests for span, packing, and containment.
+7. Add `blit_ula.c` and `video_ula.c`, written **directly in the fast form**
+   established by milestone 4; add the `tap-zx` and `if1-zx` targets; teach
+   `test/run.sh` the second compile at `-DTERM_ZX`.
 8. Add `zx-vt102.terminfo`, the bridge width option, the loop-drawn banner, and
    the README updates.
-9. ZEsarUX smoke on all three target/machine combinations; record the benchmark
-   numbers.
+9. ZEsarUX smoke on all three target/machine combinations; record the 40-column
+   benchmark numbers.
+
+The performance work is milestone 4, **before** the ULA blitter exists, so that
+`blit_ula.c` is written once in its final shape. Doing it the other way round
+would create the copy of the slow path that D24 exists to prevent.
