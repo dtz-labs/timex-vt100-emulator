@@ -94,12 +94,12 @@ static const u8 demo_stream[] =
     "Built " APP_BUILD_DATE "\r\n"
     "\r\n"
     "Bridge quick help:\r\n"
-    "  macOS -> Timex: pipe text through bridge.\r\n"
-    "  Timex -> macOS: type here; bridge writes stdout.\r\n"
-    "  make bridge-zrcp: immediate keys + local echo.\r\n"
-    "  For text files, use --input-newline crlf.\r\n"
-    "  ENTER sends CR. CAPS+0 sends Ctrl-H backspace.\r\n"
-    "  SYMBOL+0 sends underscore (_). Raw mode is optional.\r\n"
+    "  host -> target: pipe text via bridge.\r\n"
+    "  target -> host: typed keys to host.\r\n"
+    "  make bridge-zrcp: keys + local echo.\r\n"
+    "  Text files: --input-newline crlf.\r\n"
+    "  ENTER sends CR. CAPS+0=Backspace.\r\n"
+    "  SYMBOL+0=underscore, raw mode opt.\r\n"
     "\r\n"
     "Ready.";
 
