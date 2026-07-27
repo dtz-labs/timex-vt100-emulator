@@ -1,12 +1,12 @@
 /*
  * test_render.c -- host unit tests for the render module (PURE part only).
  *
- * Tests render_cell_bytes (glyph lookup + attribute transforms),
- * render_cell_span and render_pack4 (6-px cell packing into scanline bytes),
- * and render_row_bytes (a full 80-column scanline against a reference
- * painter) -- this branch's primary correctness evidence for the 80-column
- * packing arithmetic. Hardware-touching functions (render_flush,
- * render_cursor) are verified on the emulator.
+ * Tests render_cell_bytes and render_glyph_row_byte (glyph lookup + attribute
+ * transforms), render_cell_span and render_pack4 (6-px cell packing into
+ * scanline bytes), and render_row_bytes (a full 80-column scanline against a
+ * reference painter) -- this branch's primary correctness evidence for the
+ * 80-column packing arithmetic. Hardware-touching functions (blit_flush,
+ * blit_cursor, in src/blit_hires.c) are verified on the emulator.
  */
 #include <assert.h>
 #include <stdio.h>
