@@ -1,5 +1,5 @@
 /*
- * video.c -- Timex SCLD hi-res video setup (hardware-only).
+ * video_hires.c -- Timex SCLD hi-res video setup (hardware-only).
  *
  * See video.h for the bit layout of port 0xFF.
  */
@@ -20,7 +20,7 @@ u8 video_mode_byte(u8 wob)
     }
 }
 
-void video_hires_on(u8 wob)
+void video_init(u8 wob)
 {
     z80_outp(0xFF, video_mode_byte(wob));
 }

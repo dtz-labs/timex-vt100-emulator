@@ -15,6 +15,7 @@
 #include "screen.h"
 #include "vtparse.h"
 #include "render.h"
+#include "blit.h"
 #include "conn.h"
 #include "keymap.h"
 #include "keybuf.h"
@@ -93,7 +94,7 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
         }
         for (i = 0; i < n; ++i) {
             if (buf[i] == '\n' || (scr->wrap_pending && buf[i] >= 0x20u)) {
-                render_flush(scr);
+                blit_flush(scr);
             }
             old_scroll_seq = scr->scroll_seq;
             vt_feed(vt, scr, buf[i]);
@@ -101,7 +102,7 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
                 beep_bell();
             }
             if (scr->scroll_seq != old_scroll_seq) {
-                if (render_scroll_region(scr, scr->last_scroll_top,
+                if (blit_scroll_region(scr, scr->last_scroll_top,
                                          scr->last_scroll_bot,
                                          scr->last_scroll_n)) {
                     changed = 1;
@@ -250,7 +251,7 @@ static void sync_keyboard_modes(const screen_t *scr)
 }
 
 /*
- * File-scope, not locals of main(), for the same reason render.c:100 keeps
+ * File-scope, not locals of main(), for the same reason blit_hires.c keeps
  * row_glyphs/row_attrs/row_pixels off the stack: a Z80 stack frame holding
  * them would be enormous, and the linker cannot see stack usage at all, only
  * BSS. screen_t is 24*80 cell_t plus its scalars (COLS=80, ROWS=24) and
@@ -272,7 +273,7 @@ int main(void)
     u8 conn_flags;
 
     /* Init hardware: hi-res white-on-black, clear screen. */
-    video_hires_on(1);  /* white-on-black = 1 */
+    video_init(1);  /* white-on-black = 1 */
     video_clear();
 
     /* Init software: screen grid and VT parser. */
@@ -289,8 +290,8 @@ int main(void)
     }
 
     /* Render everything to display. */
-    render_flush(&scr);
-    render_cursor(&scr);
+    blit_flush(&scr);
+    blit_cursor(&scr);
 #ifndef KEYBOARD_NO_IM2
     init_keyboard_interrupts();
 #endif
@@ -308,8 +309,8 @@ int main(void)
         conn_poll();
         if (pump_conn(&vt, &scr)) {
             sync_keyboard_modes(&scr);
-            render_flush(&scr);
-            render_cursor(&scr);
+            blit_flush(&scr);
+            blit_cursor(&scr);
         }
         pump_vt_replies(&vt);
         conn_poll();

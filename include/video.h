@@ -11,7 +11,7 @@
  *
  * Functions:
  * - video_mode_byte(wob): compute mode byte for palette.
- * - video_hires_on(wob): enter hi-res mode with selected palette.
+ * - video_init(wob): enter hi-res mode with selected palette.
  * - video_clear(): clear both display files (0x4000 and 0x6000).
  *
  * This module uses z80_outp() from <z80.h> and is only tested on the target.
@@ -39,7 +39,7 @@ u8 video_mode_byte(u8 wob);
  * wob: non-zero = white-on-black, 0 = black-on-white.
  * Calls z80_outp(0xFF, video_mode_byte(wob)).
  */
-void video_hires_on(u8 wob);
+void video_init(u8 wob);
 
 /*
  * Clear both display files to zeros (paper colour in both palettes).

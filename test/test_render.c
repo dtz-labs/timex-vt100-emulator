@@ -11,6 +11,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include "render.h"
+#include "render_geom.h"
+#include "font.h"
 
 static int checks = 0;
 #define CHECK(cond) do { assert(cond); ++checks; } while (0)
@@ -188,6 +190,12 @@ static void test_cell_span_covers_six_pixels(void)
  * Reference painter: plot each cell's six pixels one at a time into a 64-byte
  * scanline. Slow and obviously correct; the packer must agree with it.
  */
+/* Timex geometry: 16-px margin, 6-px cell pitch (private to render_hires.c;
+ * mirrored here as literals since this reference painter must stay
+ * independent of the packer it is checking). */
+#define TEST_LEFT_MARGIN_PX 16u
+#define TEST_CELL_PX        6u
+
 static void paint_reference(const u8 *glyph_row, u8 ncols, u8 line[64])
 {
     u8 col, k, i;
@@ -196,7 +204,7 @@ static void paint_reference(const u8 *glyph_row, u8 ncols, u8 line[64])
         line[i] = 0;
     }
     for (col = 0; col < ncols; ++col) {
-        u16 px = (u16)(RENDER_LEFT_MARGIN_PX + RENDER_CELL_PX * (u16)col);
+        u16 px = (u16)(TEST_LEFT_MARGIN_PX + TEST_CELL_PX * (u16)col);
 
         for (k = 0; k < 6u; ++k) {
             if (glyph_row[col] & (u8)(0x80u >> k)) {
@@ -322,6 +330,19 @@ static void test_attributes_stay_inside_the_cell(void)
     }
 }
 
+static void test_glyph_row_byte_is_shared(void)
+{
+    /* render_glyph_row_byte was static; it must now be callable so both
+     * geometries can use one implementation. Row 1 of 'A' is 0x70 in the ROM
+     * font; reverse inverts only the six owned pixels. */
+    const u8 *a = font_glyph('A');
+
+    CHECK(render_glyph_row_byte(a, 0, 1) == a[1]);
+    CHECK(render_glyph_row_byte(a, ATTR_REVERSE, 1) == (u8)(~a[1] & 0xFCu));
+    CHECK(render_glyph_row_byte(a, ATTR_UNDERLINE, 7) == 0xFCu);
+    CHECK((render_glyph_row_byte(a, ATTR_REVERSE, 3) & 0x03u) == 0u);
+}
+
 int main(void)
 {
     test_render_cell_normal();
@@ -339,6 +360,7 @@ int main(void)
     test_pack4_no_gaps();
     test_row_bytes_matches_reference();
     test_attributes_stay_inside_the_cell();
+    test_glyph_row_byte_is_shared();
 
     printf("render: %d checks passed\n", checks);
     return 0;

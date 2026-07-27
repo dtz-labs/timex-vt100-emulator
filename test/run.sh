@@ -11,11 +11,15 @@ CFLAGS="-std=c99 -Wall -Wextra -Werror -I$ROOT/include"
 OUT="$ROOT/build/host"
 mkdir -p "$OUT"
 
+# Machine geometry under test. Task 8 adds a second pass here for the ZX
+# 40-column build (TERM_DEF=-DTERM_ZX, render_ula.c/blit_ula.c).
+TERM_DEF="-DTERM_TIMEX"
+
 # One executable per test_*.c, linked against the matching pure-logic sources.
-$CC $CFLAGS "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" -o "$OUT/test_screen"
+$CC $CFLAGS $TERM_DEF "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" -o "$OUT/test_screen"
 "$OUT/test_screen"
 
-$CC $CFLAGS "$ROOT/test/test_vtparse.c" "$ROOT/src/vtparse.c" "$ROOT/src/screen.c" -o "$OUT/test_vtparse"
+$CC $CFLAGS $TERM_DEF "$ROOT/test/test_vtparse.c" "$ROOT/src/vtparse.c" "$ROOT/src/screen.c" -o "$OUT/test_vtparse"
 "$OUT/test_vtparse"
 
 $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
@@ -24,7 +28,9 @@ $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
 $CC $CFLAGS "$ROOT/test/test_font.c" "$ROOT/src/font.c" -o "$OUT/test_font"
 "$OUT/test_font"
 
-$CC $CFLAGS "$ROOT/test/test_render.c" "$ROOT/src/render.c" "$ROOT/src/font.c" "$ROOT/src/hires.c" -o "$OUT/test_render"
+$CC $CFLAGS $TERM_DEF "$ROOT/test/test_render.c" "$ROOT/src/render.c" \
+    "$ROOT/src/render_hires.c" "$ROOT/src/font.c" "$ROOT/src/hires.c" \
+    -o "$OUT/test_render"
 "$OUT/test_render"
 
 $CC $CFLAGS "$ROOT/test/test_conn.c" "$ROOT/src/conn.c" -o "$OUT/test_conn"

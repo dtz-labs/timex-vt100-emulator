@@ -1,0 +1,41 @@
+/*
+ * blit.h -- write the rendered glyph rows to the display file (hardware).
+ *
+ * Exactly one implementation is linked: src/blit_hires.c for the Timex
+ * 80-column build (writes both hi-res display files), src/blit_ula.c for the
+ * ZX 40-column build. They export the same names, so they are alternatives
+ * and are never linked together.
+ *
+ * Hardware part (ZEsarUX-tested only, may include z80.h).
+ */
+#ifndef BLIT_H
+#define BLIT_H
+
+#include "types.h"
+#include "screen.h"
+
+/*
+ * Blit all dirty rows from the screen to the display file.
+ * For each dirty row, render each cell and write it to video RAM.
+ * Clears dirty flags after rendering.
+ *
+ * Hardware-only: uses direct memory writes.
+ */
+void blit_flush(screen_t *s);
+
+/*
+ * Fast hardware scroll for a full-width text-row region already reflected in
+ * the screen model. Handles one text row up/down; returns non-zero if applied.
+ * On success it also clears the region dirty flags because pixels were moved
+ * directly in video RAM.
+ */
+u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n);
+
+/*
+ * Render the cursor at the current screen position.
+ * When MODE_CURSOR_VISIBLE is set, invert the cell at (cx, cy).
+ * Hardware-only.
+ */
+void blit_cursor(const screen_t *s);
+
+#endif /* BLIT_H */

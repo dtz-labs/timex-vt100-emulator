@@ -75,7 +75,14 @@ ZRCP_HOST ?= 127.0.0.1
 TERMINFO_SRC ?= terminfo/timex-vt102.terminfo
 TERMINFO_DIR ?= $(HOME)/.terminfo
 
-SOURCES := $(sort $(wildcard src/*.c))
+# Explicit, not a wildcard: render_hires.c/render_ula.c and blit_hires.c/
+# blit_ula.c are ALTERNATIVES exporting the same symbols. A wildcard would link
+# both and fail on duplicate symbols.
+COMMON_SOURCES := src/conn.c src/font.c src/keybuf.c src/keymap.c src/main.c \
+	src/render.c src/screen.c src/vtparse.c
+TIMEX_SOURCES := $(COMMON_SOURCES) src/hires.c src/render_hires.c \
+	src/blit_hires.c src/video_hires.c
+SOURCES := $(TIMEX_SOURCES)
 HEADERS := $(sort $(wildcard include/*.h) $(wildcard src/*.h))
 BUILD_META := $(BUILD_DIR)/build_meta.h
 
