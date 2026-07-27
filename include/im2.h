@@ -18,19 +18,33 @@
  *
  * The build reads IM2_TABLE_BASE and IM2_TABLE_FILL out of this file with sed,
  * so keep each on its own line in the form `#define NAME 0xNNNN`.
- */
+ *
+ * MEASURED on target (ZEsarUX ZRCP, term.tap, 2026-07-27): __crt_stack_size
+ * (0x0200 / 512 bytes) is z88dk's *configured* allowance, not real usage, and
+ * real usage is far deeper. A canary scan of 0xD000-0xF900 after a realistic
+ * session (startup banner render, ~4KB of injected text forcing many scroll
+ * cycles, a few keypresses) found the lowest touched byte at 0xEF3D -- 3427
+ * bytes below the 0xFA02 top of the (then-current) 0xF900 table, and a direct
+ * hexdump caught live plaintext from the injected session overwriting the
+ * table itself at 0xF900-0xFA20 while the program kept running normally. Both
+ * 0xF900 and the 0xF000 fallback once considered here sit inside that
+ * observed range (0xEF3D..0xFF58), so this branch moves the table below it,
+ * to 0xE000, for real measured clearance rather than an assumed one. See the
+ * fix-wave report for the full measurement writeup; the underlying deep call
+ * chain (likely in the render/scroll path) is not fixed by relocation alone
+ * and needs its own investigation. */
 #ifndef IM2_H
 #define IM2_H
 
-#define IM2_TABLE_BASE 0xF900
-#define IM2_TABLE_FILL 0xFA
-#define IM2_TRAMPOLINE 0xFAFA
+#define IM2_TABLE_BASE 0xE000
+#define IM2_TABLE_FILL 0xE1
+#define IM2_TRAMPOLINE 0xE1E1
 
 /* Value loaded into the I register: the table base's high byte. Kept as its
  * own macro (not an expression) because the installer's inline asm needs a
  * plain literal -- the preprocessor cannot compute ">> 8" into an asm operand.
  * The check below keeps it from drifting away from IM2_TABLE_BASE. */
-#define IM2_VECTOR_PAGE 0xF9
+#define IM2_VECTOR_PAGE 0xE0
 
 /* The table must be 256-byte aligned and the trampoline must be where the
  * vector read lands, or interrupts jump into nothing. Checked at compile time
