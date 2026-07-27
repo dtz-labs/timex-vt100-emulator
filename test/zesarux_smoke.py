@@ -121,21 +121,40 @@ def _parse_glyph_table(path):
     return table
 
 
+def graphics_marker(code):
+    """Map a DEC-graphics selecting letter's code (e.g. 0x6C for 'l') to a
+    marker character distinguishable from the plain ASCII glyph of the same
+    letter. Before this, both load_project_font()'s ascii_table AND
+    graph_table entries for 'l' collapsed to the same Python character
+    (chr(0x6C) == 'l') even though their PIXEL patterns differ (a box corner
+    vs. the letter) -- so every box assertion in scenario_normal() ("row0[0]
+    == 'l'", the run of 'q', etc.) passed whether the screen showed
+    line-drawing glyphs or the literal letters. That is not a hypothetical:
+    under the exact G0-graphics charset bug fixed elsewhere in this project's
+    history, "Bridge" rendered with line-drawing glyphs in place of its
+    lowercase letters, and "Bridge" in body_text still decoded true, because
+    the two code paths produced the same character value. Setting the high
+    bit here keeps the marker one Python character (so string comparisons
+    and slicing still work) while making it impossible for a graphics glyph
+    and its same-named ASCII letter to compare equal."""
+    return chr(code | 0x80)
+
+
 def load_project_font():
     """bytes(8) -> display char, for both the ASCII range (0x20-0x7E) and the
     DEC graphics range (cell codes 0xDF-0xFE, i.e. 0x5F-0x7E | 0x80).
-    Graphics glyphs are shown under their own selecting letter ('l','k','m',
-    'j','q','x', ...) rather than the plain ASCII letter of the same name --
-    the two are different pixel patterns (a box corner vs. the letter), so
-    they will not collide in this reverse map, but showing the graphics
-    glyph under its own letter keeps ambiguity out of debug output too."""
+    Graphics glyphs map to graphics_marker(code) -- NOT chr(code) -- so a
+    graphics pixel pattern can never decode to the same character as the
+    plain ASCII letter that happens to share its selecting code. See
+    graphics_marker()'s docstring for why this distinction is load-bearing,
+    not cosmetic."""
     ascii_table = _parse_glyph_table(os.path.join(ROOT, "src", "font_ascii_data.h"))
     graph_table = _parse_glyph_table(os.path.join(ROOT, "src", "font_graph_data.h"))
     rev = {}
     for code, g in ascii_table.items():
         rev[g] = chr(code)
     for code, g in graph_table.items():  # code is 0x5F-0x7E here
-        rev.setdefault(g, chr(code))
+        rev.setdefault(g, graphics_marker(code))
     return rev
 
 
@@ -365,13 +384,26 @@ def scenario_normal(s, geom_name, cols, banner_contains, checks):
     font = load_project_font()
     display = read_display(s, geom)
 
+    # Graphics markers (see graphics_marker()) are the high-bit-set forms of
+    # the DEC special-graphics selecting letters feed_hrule()/feed_row() use
+    # for the box corners, rule, and vertical bars. Asserting against these
+    # markers -- rather than the plain letters -- is what makes this check
+    # able to fail: with the pre-fix font map, both the correct rendering and
+    # the G0-graphics charset bug (line-drawing glyphs bleeding into plain
+    # text) decoded to the exact same characters, so no assertion here could
+    # ever tell them apart.
+    gfx_l = graphics_marker(ord("l"))
+    gfx_k = graphics_marker(ord("k"))
+    gfx_q = graphics_marker(ord("q"))
+    gfx_x = graphics_marker(ord("x"))
+
     row0 = decode_row(display, geom, font, 0, 0, cols)
-    check(checks, "row0 left corner == 'l'", row0[0] == "l", repr(row0[0]))
-    check(checks, "row0 right corner == 'k'", row0[-1] == "k", repr(row0[-1]))
+    check(checks, "row0 left corner is graphics 'l'", row0[0] == gfx_l, repr(row0[0]))
+    check(checks, "row0 right corner is graphics 'k'", row0[-1] == gfx_k, repr(row0[-1]))
     check(
         checks,
-        "row0 interior is horizontal rule 'q'",
-        row0[1:-1] == "q" * (cols - 2),
+        "row0 interior is graphics horizontal rule 'q'",
+        row0[1:-1] == gfx_q * (cols - 2),
         "%r" % (row0,),
     )
 
@@ -382,7 +414,22 @@ def scenario_normal(s, geom_name, cols, banner_contains, checks):
         "VT-102 TERMINAL EMULATOR" in row1,
         repr(row1),
     )
-    check(checks, "row1 left/right bars == 'x'", row1[0] == "x" and row1[-1] == "x", repr((row1[0], row1[-1])))
+    check(
+        checks,
+        "row1 left/right bars are graphics 'x'",
+        row1[0] == gfx_x and row1[-1] == gfx_x,
+        repr((row1[0], row1[-1])),
+    )
+    # The interior text must be plain ASCII, not graphics markers -- this is
+    # the other half of the collision this test used to miss: a charset bug
+    # that leaks G1/graphics into ordinary text (as the historical bug did)
+    # would show up here as a graphics marker byte inside plain title text.
+    check(
+        checks,
+        "row1 interior title text is plain ASCII (no graphics markers)",
+        all(ord(c) < 0x80 for c in row1[1:-1].rstrip()),
+        repr(row1[1:-1]),
+    )
 
     # The free-text help/version/banner lines below the box (rows 2..23) are
     # plain literal text, not COLS-aware like feed_hrule()/feed_row() -- at
@@ -538,7 +585,14 @@ def scenario_scroll(s, geom_name, cols, checks, map_path, n_lines):
         check(checks, "post-scroll row %d == %r" % (row, want), got == want, "got=%r" % got)
         # Columns past the line's own text must be blank -- exactly the
         # "dropped dirty mark" regression named in the Task 3/4/5 reviews.
-        tail_col = min(cols - 1, len(want) + 10)
+        # Decoded across the FULL row width (not just the first ~15 columns):
+        # dirty groups are 4 cells wide, so a narrower check only exercises
+        # groups 0-3 and would never read groups 4..19 (Timex) / 4..9 (ZX) --
+        # exactly where a dropped dirty mark elsewhere on the row would be
+        # invisible. This is one bulk read either way (read_display() already
+        # pulled the whole display file up front), so decoding the rest costs
+        # nothing extra.
+        tail_col = cols
         tail = decode_row(display, geom, font, row, len(want), tail_col)
         check(
             checks,
