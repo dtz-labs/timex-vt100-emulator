@@ -26,8 +26,12 @@ void blit_flush(screen_t *s);
 /*
  * Fast hardware scroll for a full-width text-row region already reflected in
  * the screen model. Handles one text row up/down; returns non-zero if applied.
- * On success it also clears the region dirty flags because pixels were moved
- * directly in video RAM.
+ *
+ * Deliberately does NOT clear the region's dirty marks: the screen model's
+ * own scroll (screen_scroll) already migrated each surviving row's marks
+ * alongside its cells and fully marked the blanked rows, and some of those
+ * marks may cover changes that were never written to video RAM (e.g. a
+ * deferred wrap). Clearing them here would discard those pending writes.
  */
 u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n);
 

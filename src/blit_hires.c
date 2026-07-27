@@ -65,11 +65,11 @@ void blit_flush(screen_t *s)
     u8 r;
 
     for (r = 0; r < ROWS; ++r) {
-        if (!s->dirty[r]) {
+        if (!screen_row_dirty(s, r)) {
             continue;
         }
         render_row_fast(s, r);
-        s->dirty[r] = 0;  /* clear dirty flag */
+        screen_clear_marks(s, r);
     }
 }
 
@@ -118,7 +118,7 @@ static void scroll_file_down_one(u16 base, u8 top, u8 bot)
 
 u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n)
 {
-    u8 row;
+    (void)s;  /* the model's dirty marks travel with the scroll; see blit.h */
 
     if (top >= bot || bot >= ROWS) {
         return 0;
@@ -133,9 +133,6 @@ u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n)
         return 0;
     }
 
-    for (row = top; row <= bot; ++row) {
-        s->dirty[row] = 0;
-    }
     return 1;
 }
 

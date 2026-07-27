@@ -2,8 +2,9 @@
  * screen.h -- the terminal cell-grid model (pure logic, host-tested).
  *
  * An 80x24 grid of character cells with a cursor, a scroll region, the current
- * SGR attribute, and per-row dirty flags. The VT-100 parser (vtparse) drives
- * this model; the hi-res renderer (render) blits the dirty rows. This module
+ * SGR attribute, and per-row bitmaps of dirty four-cell groups. The VT-100
+ * parser (vtparse) drives this model; the hi-res renderer (render) blits the
+ * dirty rows. This module
  * knows nothing about hardware, escape sequences, or pixels -- it is the single
  * source of truth for "what the screen should show". (Design D3.)
  *
@@ -17,6 +18,16 @@
 
 #define COLS 80u
 #define ROWS 24u
+
+/*
+ * Dirty tracking granularity. Four cells is 24 px is exactly three scanline
+ * bytes in BOTH geometries, so it is the packer's natural unit and translates
+ * into blits without arithmetic. One boolean per row would repaint COLS cells
+ * for a one-character change.
+ */
+#define DIRTY_GROUP_COLS 4u
+#define DIRTY_GROUPS ((COLS + DIRTY_GROUP_COLS - 1u) / DIRTY_GROUP_COLS)
+#define DIRTY_BYTES ((DIRTY_GROUPS + 7u) / 8u)
 
 /* Cell attribute bits (monochrome hi-res: colour is global, so attrs are the
  * few monochrome effects a VT-100 needs). */
@@ -43,7 +54,7 @@ typedef struct {
     u8 cx, cy;        /* cursor column (0..COLS-1), row (0..ROWS-1) */
     u8 top, bot;      /* scroll region: rows [top..bot] inclusive    */
     u8 attr;          /* current SGR attribute, copied into cells on putc */
-    u8 dirty[ROWS];   /* per-row dirty flag: non-zero => needs repaint    */
+    u8 dirty[ROWS][DIRTY_BYTES];  /* per-row bitmap of dirty four-cell groups */
     u8 saved_cx, saved_cy, saved_attr;  /* DECSC/DECRC saved cursor + SGR */
     u8 mode;          /* MODE_* bits                                      */
     u8 wrap_pending;  /* VT-100 deferred wrap: last column written, awaiting */
@@ -52,13 +63,33 @@ typedef struct {
     s8 last_scroll_n;
 } screen_t;
 
+/* Mark the four-cell group containing (row, col) dirty. */
+void screen_mark_cell(screen_t *s, u8 row, u8 col);
+
+/* Mark every four-cell group touched by the inclusive column span [c0..c1] of
+ * row dirty. */
+void screen_mark_span(screen_t *s, u8 row, u8 c0, u8 c1);
+
+/* Mark every four-cell group of row dirty. */
+void screen_mark_row(screen_t *s, u8 row);
+
+/* Clear all dirty marks for row. */
+void screen_clear_marks(screen_t *s, u8 row);
+
+/* Non-zero if the given four-cell group of row is marked dirty. */
+u8 screen_group_dirty(const screen_t *s, u8 row, u8 group);
+
+/* Non-zero if any four-cell group of row is marked dirty. */
+u8 screen_row_dirty(const screen_t *s, u8 row);
+
 /* Reset to a blank screen: every cell a space with no attributes, cursor home,
  * scroll region the full screen, current attribute cleared, all rows marked
  * dirty (a fresh screen must be painted once). */
 void screen_init(screen_t *s);
 
 /* Write one printable character at the cursor using the current attribute,
- * mark the cursor's row dirty, and advance the cursor one column. In the last
+ * mark the written cell's four-cell group dirty, and advance the cursor one
+ * column. In the last
  * column the cursor parks: with MODE_AUTOWRAP the wrap is deferred (VT-100
  * style) and fires on the next printable (CR+LF, scrolling at the region
  * bottom); without it the cell is overwritten in place. Any explicit cursor
@@ -70,10 +101,11 @@ void screen_putc(screen_t *s, u8 ch);
 void screen_cup(screen_t *s, u8 row, u8 col);
 
 /* Scroll the current scroll region [top..bot] by n lines, blanking the freed
- * rows (space, attr 0) and marking the whole region dirty. The cursor is not
- * moved (callers manage it). n > 0 scrolls up (content moves toward the top,
- * blanks appear at the bottom); n < 0 scrolls down. |n| is clamped to the
- * region height. Rows outside the region are untouched. */
+ * rows (space, attr 0) and marking them fully dirty; surviving rows keep the
+ * dirty marks of the content that moved with them. The cursor is not moved
+ * (callers manage it). n > 0 scrolls up (content moves toward the top, blanks
+ * appear at the bottom); n < 0 scrolls down. |n| is clamped to the region
+ * height. Rows outside the region are untouched. */
 void screen_scroll(screen_t *s, s8 n);
 
 /* Carriage return: cursor to column 0 of the current row. */

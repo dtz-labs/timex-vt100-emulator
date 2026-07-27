@@ -3,6 +3,52 @@
  */
 #include "screen.h"
 
+void screen_mark_cell(screen_t *s, u8 row, u8 col)
+{
+    u8 g = (u8)(col / DIRTY_GROUP_COLS);
+
+    s->dirty[row][g >> 3] |= (u8)(1u << (g & 7u));
+}
+
+void screen_mark_span(screen_t *s, u8 row, u8 c0, u8 c1)
+{
+    u8 g = (u8)(c0 / DIRTY_GROUP_COLS);
+    u8 last = (u8)(c1 / DIRTY_GROUP_COLS);
+
+    for (; g <= last; ++g) {
+        s->dirty[row][g >> 3] |= (u8)(1u << (g & 7u));
+    }
+}
+
+void screen_mark_row(screen_t *s, u8 row)
+{
+    screen_mark_span(s, row, 0, (u8)(COLS - 1u));
+}
+
+void screen_clear_marks(screen_t *s, u8 row)
+{
+    u8 b;
+
+    for (b = 0; b < DIRTY_BYTES; ++b) {
+        s->dirty[row][b] = 0;
+    }
+}
+
+u8 screen_group_dirty(const screen_t *s, u8 row, u8 group)
+{
+    return (u8)(s->dirty[row][group >> 3] & (u8)(1u << (group & 7u)));
+}
+
+u8 screen_row_dirty(const screen_t *s, u8 row)
+{
+    u8 b, any = 0;
+
+    for (b = 0; b < DIRTY_BYTES; ++b) {
+        any |= s->dirty[row][b];
+    }
+    return any;
+}
+
 void screen_init(screen_t *s)
 {
     u8 r, c;
@@ -12,7 +58,7 @@ void screen_init(screen_t *s)
             s->cells[r][c].ch = BLANK_CH;
             s->cells[r][c].attr = 0;
         }
-        s->dirty[r] = 1;
+        screen_mark_row(s, r);
     }
     s->cx = 0;
     s->cy = 0;
@@ -38,7 +84,7 @@ void screen_putc(screen_t *s, u8 ch)
     }
     s->cells[s->cy][s->cx].ch = ch;
     s->cells[s->cy][s->cx].attr = s->attr;
-    s->dirty[s->cy] = 1;
+    screen_mark_cell(s, s->cy, s->cx);   /* mark before the cursor advances */
     if (s->cx + 1u >= COLS) {
         /* Last column: park the cursor. With autowrap, defer the wrap until the
          * next printable (VT-100). Without it, stay put and overwrite in place. */
@@ -74,8 +120,9 @@ static void blank_row(screen_t *s, int r)
 }
 
 /* Scroll an arbitrary inclusive row region [top..bot] by n (>0 up, <0 down),
- * blanking freed rows and dirtying the region. Shared by screen_scroll (the
- * whole scroll region) and IL/DL (a region starting at the cursor row). */
+ * blanking freed rows (fully dirtied) and migrating each surviving row's
+ * dirty marks along with its cells. Shared by screen_scroll (the whole scroll
+ * region) and IL/DL (a region starting at the cursor row). */
 static s8 effective_scroll_n(int top, int bot, int n)
 {
     int height = bot - top + 1;
@@ -106,23 +153,27 @@ static void scroll_region(screen_t *s, int top, int bot, int n)
             for (c = 0; c < (int)COLS; ++c) {
                 s->cells[r][c] = s->cells[r + absn][c];
             }
+            for (c = 0; c < (int)DIRTY_BYTES; ++c) {
+                s->dirty[r][c] = s->dirty[r + absn][c];
+            }
         }
         for (r = bot - absn + 1; r <= bot; ++r) {
             blank_row(s, r);
+            screen_mark_row(s, (u8)r);
         }
     } else {                           /* scroll down: content moves toward bot */
         for (r = bot; r >= top + absn; --r) {
             for (c = 0; c < (int)COLS; ++c) {
                 s->cells[r][c] = s->cells[r - absn][c];
             }
+            for (c = 0; c < (int)DIRTY_BYTES; ++c) {
+                s->dirty[r][c] = s->dirty[r - absn][c];
+            }
         }
         for (r = top; r <= top + absn - 1; ++r) {
             blank_row(s, r);
+            screen_mark_row(s, (u8)r);
         }
-    }
-
-    for (r = top; r <= bot; ++r) {
-        s->dirty[r] = 1;
     }
 }
 
@@ -174,7 +225,7 @@ static void blank_cells(screen_t *s, int row, int c0, int c1)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)c0, (u8)c1);
 }
 
 void screen_erase_line(screen_t *s, u8 mode)
@@ -240,7 +291,7 @@ void screen_insert_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)cx, (u8)(COLS - 1u));
 }
 
 void screen_delete_chars(screen_t *s, u8 n)
@@ -259,7 +310,7 @@ void screen_delete_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)cx, (u8)(COLS - 1u));
 }
 
 void screen_set_attr(screen_t *s, u8 sgr)
