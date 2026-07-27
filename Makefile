@@ -93,6 +93,14 @@ IF1_MAP := $(IF1_APP).map
 IM2_TABLE_BASE ?= $(shell sed -n 's/^\#define IM2_TABLE_BASE[[:space:]]*\(0x[0-9A-Fa-f]*\).*/\1/p' include/im2.h)
 IM2_TABLE_FILL ?= $(shell sed -n 's/^\#define IM2_TABLE_FILL[[:space:]]*\(0x[0-9A-Fa-f]*\).*/\1/p' include/im2.h)
 CHECK_IMAGE_LIMIT = python3 tools/check_image_limit.py
+
+# The z88dk/z88dk:latest image CI builds inside (an Alpine base) has no python3,
+# so the gate cannot run as part of the `zcc` recipe there. CI instead builds
+# with SKIP_IMAGE_LIMIT_CHECK=1 and runs `make check-image-limit` as its own
+# step on the runner afterwards, against the .map files the container produced
+# (see .github/workflows/ci.yml and release.yml). Local builds leave this unset
+# and get the check inline, as before.
+SKIP_IMAGE_LIMIT_CHECK ?= 0
 IF1_BAUD ?= RS_BAUD_9600
 IF1_DEFS ?= -DCONN_BACKEND_IF1 -DCONN_IF1_BAUD=$(IF1_BAUD)
 SERIAL ?=
@@ -111,7 +119,7 @@ ZRCP_CMD ?=
 
 .PHONY: all tap if1 release-build test host-test ci python-check terminfo-check smoke install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
 	run-tc2048 run-tc2068 run-ts2068 clean \
-	check-z88dk check-zesarux check-timex-machine print-vars FORCE
+	check-z88dk check-zesarux check-timex-machine check-image-limit print-vars FORCE
 
 all: tap
 
@@ -143,6 +151,16 @@ terminfo-check: $(TERMINFO_SRC)
 
 smoke: $(TAP) check-zesarux
 	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py
+
+# Runs the IM2 image-limit gate standalone against already-built .map files.
+# Used by CI as its own step outside the z88dk container (see
+# SKIP_IMAGE_LIMIT_CHECK above), but works locally too: `make tap if1
+# SKIP_IMAGE_LIMIT_CHECK=1 && make check-image-limit`.
+check-image-limit:
+	@test -f "$(MAP)" || { echo "$(MAP) not found; build $(TAP) first"; exit 1; }
+	$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
+	@test -f "$(IF1_MAP)" || { echo "$(IF1_MAP) not found; build $(IF1_TAP) first"; exit 1; }
+	$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 
 install-terminfo: $(TERMINFO_SRC)
 	@command -v tic >/dev/null 2>&1 || { echo "tic not found"; exit 127; }
@@ -194,14 +212,18 @@ $(TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(SOURCES) -o "$(APP)" -create-app $(Z88DK_LDFLAGS)
-	@$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
 
 $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(IF1_TAP)"
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
 	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
 		$(IF1_DEFS) $(SOURCES) -o "$(IF1_APP)" -create-app $(Z88DK_LDFLAGS)
-	@$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
 
 $(BUILD_DIR):
 	@mkdir -p "$(BUILD_DIR)"
