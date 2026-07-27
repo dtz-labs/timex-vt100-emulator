@@ -359,10 +359,46 @@ adds one more function (`feed_row()`) and a cursor-position-driven padding
 loop, so the size cost compounds rather than cancels.
 
 All four TAPs still build and pass `check-image-limit` with ample margin
-(2214-4905 bytes) -- this is a correction to a size estimate, not a build
-failure. No further size optimization was attempted: the functional
-correctness goal (box closes flush and no line wraps, at both 40 and 80
-columns) was the point of the task, and the margin is nowhere near the gate.
+(2214-4905 bytes, at the point this task's own measurement was taken) -- this
+is a correction to a size estimate, not a build failure. No further size
+optimization was attempted: the functional correctness goal (box closes flush
+and no line wraps, at both 40 and 80 columns) was the point of the task, and
+the margin is nowhere near the gate.
+
+**This range is itself now stale** -- every later task that touches
+`src/main.c`, `screen.c`, or the blitters moves these margins again, in either
+direction. Treat the table above as a point-in-time measurement of Task 10's
+own change, not a current fact. **"Fix wave: memory-map refresh" below is the
+one table in this file meant to be kept current** as of the most recent code
+change; `docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md` §8
+points here rather than re-stating the numbers for exactly this reason.
+
+## Fix wave (2026-07-27): memory-map refresh
+
+A whole-branch review found `docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md`
+§8's memory map stale by about 1,800 bytes against the map files on disk at
+the time of the review (`term.map` `0xE55A`/2,214; `term-if1.map` `0xE451`;
+`term-zx.map` `0xDAD7`; `term-zx-if1.map` `0xD9CE`). Fixing the review's other
+findings in the same pass (C1's dirty-mark fix in `screen.c`/`main.c`, the
+shortened startup banner, and I5's macro/inline collapse below) moved the
+image end again, in both directions, before this file could even be updated
+-- underscoring why §8 now points here instead of hosting its own copy.
+Measured immediately after all of this fix wave's code changes landed
+(`make release-build`, reading each TAP's own `check_image_limit.py` output):
+
+| TAP | Image ends (`__BSS_END_tail`) | Margin to `0xEE00` |
+|---|---:|---:|
+| `build/term.tap` | `0xE681` | 1,919 bytes |
+| `build/term-if1.tap` | `0xE578` | 2,184 bytes |
+| `build/term-zx.tap` | `0xDBD4` | 4,652 bytes |
+| `build/term-zx-if1.tap` | `0xDACB` | 4,917 bytes |
+
+All four still pass `check-image-limit` (`make ci`, `make tap`/`make if1`/
+`make tap-zx`/`make if1-zx`) with margin to spare, though the Timex builds'
+margin (1,919 / 2,184 bytes) is visibly the tighter of the two geometries --
+worth remembering for whoever next adds a feature that grows `screen_init()`,
+`main.c`, or the shared blit path, since the ZX builds have roughly 2.5x the
+headroom.
 
 ## Task 11: the 40-column row, measured against the design's extrapolation
 
@@ -440,6 +476,97 @@ scroll_model   101533   scroll_vram 680099
 row_normal     130748   row_attrs  274710   row_blank  28127
 scroll_model   53808    scroll_vram 327243
 ```
+
+## I5 (fix wave 2026-07-27): macro/inline vs. hand-duplicated formulas
+
+A whole-branch review pointed out that every measurement above justifying
+duplication ("Function-call vs. inlined mapping/dirty-check", "ULA blitter:
+duplicate vs. call (Task 9)", "Task 9: moving row_scanline_offset out of
+blit_hires.c") only ever compared **duplicated inline code** against a
+**real cross-translation-unit function call** -- the third option, a
+`static inline` function or macro defined once in a shared header (which
+SDCC can emit with no `CALL` at all), was never tried. Both blitters
+hand-copy `render_group_bytes()`'s index arithmetic and
+`screen_group_dirty()`'s bit test, and the scroll path in both hand-copies
+the "thirds" formula -- three permanent, untested duplications the reviewer
+asked to be re-measured against this third option before accepting them as
+permanent.
+
+**Change made, to try it:**
+
+- `SCREEN_GROUP_DIRTY_BIT(s, row, group)` -- `include/screen.h`, a macro.
+  `screen_group_dirty()` (`src/screen.c`) is now a one-line wrapper around it;
+  both `blit_hires.c` and `blit_ula.c` call the macro directly instead of
+  hand-copying the bit test.
+- `RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2)` --
+  `include/render_geom.h`, a macro, geometry-selected by the same
+  `TERM_TIMEX`/`TERM_ZX` defines every other geometry header already switches
+  on. `render_group_bytes()` (`src/render_hires.c`/`src/render_ula.c`) is
+  unchanged (still the host-tested, function-call form `test_render.c`
+  exercises); the macro is the same formula, single-sourced next to that
+  function's declaration, for the one call site where a real `CALL` was
+  measured too expensive.
+- `HIRES_THIRDS_OFFSET(prow)` / `ULA_THIRDS_OFFSET(prow)` -- `include/hires.h`
+  / `include/ula.h`, macros. `hires_addr()`/`hires_row_scanline_offset()`
+  (`src/hires.c`) and `ula_addr()`/`ula_row_scanline_offset()` (`src/ula.c`)
+  now call these macros instead of a local `static` helper function; the
+  scroll primitives in both blitters (`scroll_file_up_one`/`down_one`,
+  `scroll_up_one`/`down_one`) now use the macro directly at each of their
+  ~750 (hi-res) / ~370 (ULA) call sites per `blit_scroll_region()`, instead of
+  keeping a private hand-copy of the same bit arithmetic.
+
+Chose macros over `static inline` functions throughout: SDCC/zsdcc's
+`inline` support is not assumed to guarantee no `CALL` is emitted (unlike a
+macro, which cannot possibly emit one), and the whole point of this
+re-measurement was to not assume anything about SDCC's code generation that
+wasn't directly tested.
+
+**Re-measured with `tools/bench.sh`** (same harness and compiler build used
+throughout this file, `zcc ... v23854-4d530b6eb7-20251002`), comparing the
+shipped hand-duplicated formulas (the "before" figures already recorded
+above in this file, re-confirmed with a fresh run before making any change)
+against the macro/inline versions:
+
+| Path | Timex before | Timex after | Delta | ZX before | ZX after | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| row_normal | 268,229 | 268,717 | +488 (+0.18%) | 130,766 | 129,732 | -1,034 (-0.79%) |
+| row_attrs | 550,109 | 550,543 | +434 (+0.08%) | 274,710 | 273,694 | -1,016 (-0.37%) |
+| row_blank | 41,214 | 40,198 | -1,016 (-2.5%) | 28,127 | 27,111 | -1,016 (-3.6%) |
+| scroll_model | 101,533 | 101,533 | 0 (unchanged -- this path never touches these formulas) | 53,783 | 53,808 | +25 (noise) |
+| **scroll_vram** | **680,099** | **565,037** | **-115,062 (-16.9%)** | **327,243** | **265,581** | **-61,662 (-18.8%)** |
+
+("Before" here is this branch's own state immediately after C1's dirty-mark
+fix and the startup-banner shortening, both landed earlier in this same fix
+wave -- not the historical Task 9/11 numbers quoted elsewhere in this file,
+which predate those changes by a small, disclosed amount; `row_normal`
+268,229 vs. 268,283 and 130,766 vs. 130,748 elsewhere in this file are that
+difference, not a discrepancy in this measurement.)
+
+Re-ran `tools/bench.sh` a second time with no code changes between runs:
+identical to the T-state, confirming `z88dk-ticks`' documented zero
+run-to-run variance still holds for this measurement.
+
+**Decision: took the macro/inline collapse.** `row_normal`/`row_attrs` land
+within about 1,000 T either way -- noise-level, not a systematic cost, unlike
+every previous "call vs. duplicate" measurement in this file. `row_blank` and
+especially `scroll_vram` **improved**, on both geometries: expressing the
+offset formula as a macro at the scroll path's ~750/~370 call sites removes
+the `CALL`/`RET` and stack-marshalled argument overhead entirely, rather than
+merely avoiding the +14%/+95,504 T regression a real function call caused
+there (see "Task 9: moving row_scanline_offset out of blit_hires.c" above).
+This collapses four permanent, untestable hand-copies (the dirty-bit test and
+group-to-byte arithmetic in both blitters, plus the "thirds" formula's
+scroll-path copy in both) into one macro definition each, reachable from --
+and exercised by -- the same host tests that already cover
+`screen_group_dirty()`, `render_group_bytes()`, and
+`hires_row_scanline_offset()`/`ula_row_scanline_offset()`.
+
+The `CONSTRAINT` comments at each formula's original definition
+(`include/screen.h`, `include/render_geom.h`, `include/hires.h`,
+`include/ula.h`) and the blitters' own comments have been updated to point at
+the macros instead of describing a hand-copy that no longer exists; the
+"DUPLICATED FORMULAS -- KNOWN, MEASURED, DELIBERATE" banner comments are
+removed since there is no longer a duplicate to warn about.
 
 Despite a different z88dk build (`v1-fe33ce01-20260726` vs. the local
 `v23854-4d530b6eb7-20251002` used everywhere else in this file), every

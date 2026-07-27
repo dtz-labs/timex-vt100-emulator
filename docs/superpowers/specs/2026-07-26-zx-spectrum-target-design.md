@@ -229,9 +229,6 @@ installed, since `keymap`/`keybuf` are not running yet.
 or `ZX Spectrum (ULA) 40x24`, selected by `#ifdef`. A detection fault is still
 visible, because on a Timex the guard would have refused.
 
-Both builds print the detected name in the startup banner, so a detection fault
-on real hardware is visible rather than silent.
-
 ---
 
 ## 7. Performance work carried into this slice
@@ -314,8 +311,24 @@ container cross-check.
 
 ## 8. Memory map and the IM2 hazard
 
-Measured from `build/term.map` of the current 80-column build, after hoisting
-`main()`'s two large locals to file scope (see below):
+**This section is a dated snapshot, not a live figure.** The address map and
+narrative below record the measurement and reasoning behind the `0xEE00`
+IM2-table placement at the time of the im2-guard follow-up; every later
+change to `src/main.c`, `screen.c`, or the blitters moves the actual image end
+and margin again, in either direction (a whole-branch review found this
+section stale by roughly 1,800 bytes against the build on disk at review
+time, and the very fix wave that corrected that finding moved the numbers
+again before the correction could even be written down). **For the current
+measured margin on all four TAPs, see `docs/perf/benchmarks.md`, "Fix wave:
+memory-map refresh"** (or its most recent equivalent section) rather than
+trusting the numbers quoted here. The `0xEE00` table placement itself,
+`IM2_TABLE_BASE`/`IM2_VECTOR_PAGE` (`include/im2.h`), and
+`tools/check_image_limit.py`'s enforcement are still current; only the
+specific byte counts below are a snapshot.
+
+Measured from `build/term.map` of the 80-column build at the time of the
+im2-guard follow-up, after hoisting `main()`'s two large locals to file scope
+(see below):
 
 ```
 0x4000  display file        (ULA bitmap / hi-res even columns)
@@ -476,9 +489,16 @@ A wrong width here produces subtly wrong wrapping, so it must not default
 silently to 80 for a 40-column terminal.
 
 **Banner.** The 80-column box does not fit in 40. The banner frame is drawn with
-a loop over `COLS` rather than stored as two string literals, which also saves
-roughly 400 bytes of image — relevant given §8. It carries the detected machine
-name and the active geometry.
+a loop over `COLS` rather than stored as two string literals. This was estimated
+to save roughly 400 bytes of image; measured on all four TAPs it instead **grew**
+the image by 300 bytes (`build/term.tap` margin 2514 -> 2214, `2514 - 2214 = 300`
+bytes of growth, not saving) — SDCC's per-call/per-branch overhead under
+`-clib=sdcc_iy` exceeds the literal bytes the loop removes, for functions this
+small. See `docs/perf/benchmarks.md`, "Task 10: image-size estimate vs.
+measured" for the full before/after table and the reason. The banner names the
+build via `#ifdef` (§6, D21) — it does not carry a runtime-detected machine name
+or the active geometry as a runtime value; both are compile-time facts baked
+into the string the `#ifdef` selects.
 
 ---
 
