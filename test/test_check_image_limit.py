@@ -182,11 +182,11 @@ def test_shipped_im2_header_constants_pass_the_gate():
 
     base = int(base_text, 0)
     fill = int(fill_text, 0)
-    check(base == 0xE000, "IM2_TABLE_BASE matches the header's declared constant")
-    check(fill == 0xE1, "IM2_TABLE_FILL matches the header's declared constant")
+    check(base == 0xEE00, "IM2_TABLE_BASE matches the header's declared constant")
+    check(fill == 0xEF, "IM2_TABLE_FILL matches the header's declared constant")
 
     with tempfile.TemporaryDirectory() as d:
-        rep = cil.analyse(write_map(d, "$CF1C"), base, fill)
+        rep = cil.analyse(write_map(d, "$DE62"), base, fill)
         check(rep.ok, "the gate accepts the shipped constants against a synthetic map")
 
 

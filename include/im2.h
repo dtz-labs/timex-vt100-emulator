@@ -19,32 +19,65 @@
  * The build reads IM2_TABLE_BASE and IM2_TABLE_FILL out of this file with sed,
  * so keep each on its own line in the form `#define NAME 0xNNNN`.
  *
- * MEASURED on target (ZEsarUX ZRCP, term.tap, 2026-07-27): __crt_stack_size
- * (0x0200 / 512 bytes) is z88dk's *configured* allowance, not real usage, and
- * real usage is far deeper. A canary scan of 0xD000-0xF900 after a realistic
- * session (startup banner render, ~4KB of injected text forcing many scroll
- * cycles, a few keypresses) found the lowest touched byte at 0xEF3D -- 3427
- * bytes below the 0xFA02 top of the (then-current) 0xF900 table, and a direct
- * hexdump caught live plaintext from the injected session overwriting the
- * table itself at 0xF900-0xFA20 while the program kept running normally. Both
- * 0xF900 and the 0xF000 fallback once considered here sit inside that
- * observed range (0xEF3D..0xFF58), so this branch moves the table below it,
- * to 0xE000, for real measured clearance rather than an assumed one. See the
- * fix-wave report for the full measurement writeup; the underlying deep call
- * chain (likely in the render/scroll path) is not fixed by relocation alone
- * and needs its own investigation. */
+ * HISTORY (2026-07-27 fix wave, superseded below): __crt_stack_size (0x0200 /
+ * 512 bytes) is z88dk's *configured* allowance, not measured usage. A canary
+ * scan of 0xD000-0xF900 after a realistic session (startup banner render,
+ * ~4KB of injected text forcing many scroll cycles, a few keypresses) found
+ * the lowest touched byte at 0xEF3D -- 2757 bytes below the 0xFA02 top of the
+ * then-current 0xF900 table (0xFA02 - 0xEF3D = 0xAC5 = 2757; an earlier note
+ * here miscalculated this as 3427), and a direct hexdump caught live
+ * plaintext from the injected session overwriting the table itself at
+ * 0xF900-0xFA20 while the program kept running normally. Both 0xF900 and the
+ * 0xF000 fallback once considered sat inside that observed range
+ * (0xEF3D..0xFF58), so that fix wave moved the table to 0xE000 for real
+ * measured clearance rather than an assumed one. At the time, the suspected
+ * root cause was a deep call chain in the render/scroll path, not fixed by
+ * relocation alone.
+ *
+ * ROOT CAUSE FOUND AND FIXED (im2-guard follow-up, same date): the "deep call
+ * chain" was not recursion or an unusually long call sequence -- it was one
+ * oversized stack frame. main() (src/main.c) declared `screen_t scr` and
+ * `vtparse_t vt` as locals: screen_t alone is 24*80 cell_t (3,840 bytes) plus
+ * its scalars, with vtparse_t beside it, together accounting for almost all
+ * of the measured 4,123-byte frame (SP seed 0xFF58 down to the 0xEF3D
+ * low-water mark above). Both are now file-scope statics in main.c, for the
+ * same reason src/render.c:100 keeps row_glyphs/row_attrs/row_pixels off the
+ * stack: it turns stack depth the linker cannot see into BSS that
+ * tools/check_image_limit.py's __BSS_END_tail reading can. This moved
+ * __BSS_END_tail from 0xCF1C to 0xDE62 (+3,910 bytes) and, per the
+ * remeasurement below, cut real stack depth from 4,123 bytes to roughly 200.
+ *
+ * REMEASURED after the hoist (ZEsarUX ZRCP, term.tap, 2026-07-27): two full
+ * runs, each five passes (boot + banner render, ~2.6KB injected text forcing
+ * scroll, a keypress burst, a heavier ~7KB session with scroll-region changes
+ * and insert/delete-line churn, a second keypress burst), read back with
+ * ZRCP's get-visualmem-written-dump instead of a canary fill. The boot pass
+ * in both runs showed *every* byte from 0xDE62 (the new image end) to 0xFFFF
+ * written 3-5 times each -- the Spectrum's own power-on RAM test/clear, not
+ * program activity, confirmed by the fact that it covers 100% of the range
+ * uniformly regardless of session content. Excluding that boot artifact, the
+ * real low-water mark measured identically in both runs at 0xFE8F (heaviest
+ * pass), i.e. about 201 bytes below the 0xFF58 seed -- far inside the
+ * configured 512-byte __crt_stack_size. A planned third, still-heavier pass
+ * (a full 24-row screen clear+redraw plus scroll-region extremes) was started
+ * but did not finish in the time available, so this measurement, though
+ * reproduced twice, is not a proof that 0xFE8F is the absolute deepest the
+ * program can ever reach -- only the deepest observed. The table below is
+ * placed with margin against both this measured figure and the more
+ * conservative __crt_stack_size-implied floor (0xFD58), not against 0xFE8F
+ * alone. See the hoist report for the full writeup and raw data. */
 #ifndef IM2_H
 #define IM2_H
 
-#define IM2_TABLE_BASE 0xE000
-#define IM2_TABLE_FILL 0xE1
-#define IM2_TRAMPOLINE 0xE1E1
+#define IM2_TABLE_BASE 0xEE00
+#define IM2_TABLE_FILL 0xEF
+#define IM2_TRAMPOLINE 0xEFEF
 
 /* Value loaded into the I register: the table base's high byte. Kept as its
  * own macro (not an expression) because the installer's inline asm needs a
  * plain literal -- the preprocessor cannot compute ">> 8" into an asm operand.
  * The check below keeps it from drifting away from IM2_TABLE_BASE. */
-#define IM2_VECTOR_PAGE 0xE0
+#define IM2_VECTOR_PAGE 0xEE
 
 /* The table must be 256-byte aligned and the trampoline must be where the
  * vector read lands, or interrupts jump into nothing. Checked at compile time

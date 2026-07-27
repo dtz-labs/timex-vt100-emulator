@@ -249,10 +249,25 @@ static void sync_keyboard_modes(const screen_t *scr)
     keymap_set_cursor_application((scr->mode & MODE_CURSOR_APPLICATION) != 0);
 }
 
+/*
+ * File-scope, not locals of main(), for the same reason render.c:100 keeps
+ * row_glyphs/row_attrs/row_pixels off the stack: a Z80 stack frame holding
+ * them would be enormous, and the linker cannot see stack usage at all, only
+ * BSS. screen_t is 24*80 cell_t plus its scalars (COLS=80, ROWS=24) and
+ * vtparse_t sits beside it; together they were the dominant part of a
+ * measured 4,123-byte main() stack frame (SP seed 0xFF58 down to a low-water
+ * mark of 0xEF3D -- see include/im2.h and the fix-wave report) even though
+ * main() never recurses and has no other large locals. Moving them here
+ * turns that frame into BSS that tools/check_image_limit.py's __BSS_END_tail
+ * reading actually accounts for, instead of stack depth the linker never
+ * modeled. Safe because main() runs once, is never re-entered, and both are
+ * always passed by pointer to the functions that use them.
+ */
+static screen_t scr;
+static vtparse_t vt;
+
 int main(void)
 {
-    screen_t scr;
-    vtparse_t vt;
     u16 i = 0;
     u8 conn_flags;
 

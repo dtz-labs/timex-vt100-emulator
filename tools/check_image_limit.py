@@ -174,13 +174,13 @@ def main(argv=None):
         "--im2-base",
         required=True,
         type=lambda v: int(v, 0),
-        help="IM2 vector table base address, e.g. 0xE000",
+        help="IM2 vector table base address, e.g. 0xEE00",
     )
     ap.add_argument(
         "--im2-fill",
         required=True,
         type=lambda v: int(v, 0),
-        help="byte the table is filled with, e.g. 0xE1",
+        help="byte the table is filled with, e.g. 0xEF",
     )
     args = ap.parse_args(argv)
 

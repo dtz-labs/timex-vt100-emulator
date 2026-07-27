@@ -39,7 +39,7 @@ Continuing the D-numbering.
 | D20 | **The Spectrum build is monochrome with one global colour.** | A cell is 6 px; an attribute block is 8 px. Per-cell colour is physically impossible — a colour change mid-line would corrupt the neighbouring cell. The attribute file is filled once with `0x47` (bright white on black), border black. This matches Timex hi-res, which is also monochrome, so `REVERSE` and `UNDERLINE` behave identically on both machines. |
 | D21 | **Machine detection is kept, but as a wrong-machine guard and a banner line — not a mode selector.** | With D17 there is no mode to select. The Timex build on a Spectrum would render garbage (half its pixels go to `0x6000`, which the ULA does not display), so that build refuses to start on a non-SCLD machine. The reverse needs no guard: a Timex boots in Spectrum-compatible ULA mode, so the Spectrum TAP runs correctly on it at 40 columns. |
 | D22 | **Holding CAPS SHIFT at boot bypasses the guard. Timex build only.** | Insurance for clones and interfaces that decode port `$FF` incompletely and could make a genuine Timex fail the probe. Costs a few dozen bytes and cannot be debugged any other way on real hardware. The Spectrum build has no guard, so the key does nothing there. Accepted consequence: holding CAPS SHIFT with the Timex TAP on a real Spectrum produces exactly the unreadable half-image D21 exists to prevent — that is the point of an override, and it is reachable only by deliberate action. |
-| D23 | **The IM2 vector table moves off the hardcoded `0xD300`/`0xD4D4` it once used and gains a build-time image-limit gate.** | `main.c` used to write the table at a hardcoded `0xD300`, trampoline at `0xD4D4`, right above an image that once ended at `0xCD58`; the linker knew nothing about either address, so a build that grew past the table linked cleanly and then overwrote its own code during IM2 setup. The table now lives at `0xE000` (`I = 0xE0`) — moved there from an interim `0xF900` by a fix-wave measurement that found real stack/call depth reaching down to `0xEF3D`, deeper than `0xF900` (and a considered `0xF000` fallback) — a single source of truth in `include/im2.h`, and `tools/check_image_limit.py` fails the build if the image, the table, or the stack collide. See §8. |
+| D23 | **The IM2 vector table moves off the hardcoded `0xD300`/`0xD4D4` it once used and gains a build-time image-limit gate.** | `main.c` used to write the table at a hardcoded `0xD300`, trampoline at `0xD4D4`, right above an image that once ended at `0xCD58`; the linker knew nothing about either address, so a build that grew past the table linked cleanly and then overwrote its own code during IM2 setup. The table moved through an interim `0xF900`, then to `0xE000` (`I = 0xE0`) after a fix-wave measurement found real stack/call depth reaching down to `0xEF3D` — deeper than `0xF900` and a considered `0xF000` fallback. That measurement's suspected "deep call chain" turned out to be one oversized stack frame in `main()` (`screen_t scr` and `vtparse_t vt`, together nearly the whole 4,123 bytes); hoisting both to file scope fixed the root cause and moved the table again, to `0xEE00` (`I = 0xEE`), this time because the image had grown, not because the stack still reached that deep. A single source of truth in `include/im2.h`, and `tools/check_image_limit.py`, fails the build if the image, the table, or the stack collide. See §8. |
 | D24 | **The performance findings that touch the code this slice rewrites are done here, not deferred.** | Supersedes D16 for these paths only. Writing the ULA blitter as a copy of the current hi-res path would produce code that the review already shows must be rewritten. See §7 for what is in and what is explicitly not. |
 | D25 | **T-state benchmarks are recorded, not enforced in CI.** | A regression threshold needs a pinned compiler; `ci.yml` uses `z88dk/z88dk:latest`. Numbers are printed and committed as reference points. |
 | D26 | **A separate terminfo entry, `zx-vt102`, with `cols#40`.** | The host must be told the real width or every wrapped line will be wrong. `timex-vt102` keeps `cols#80`. |
@@ -303,30 +303,34 @@ not a copy-and-adjust job. The 40-column figures are extrapolations from the
 
 ## 8. Memory map and the IM2 hazard
 
-Measured from `build/term.map` of the current 80-column build:
+Measured from `build/term.map` of the current 80-column build, after hoisting
+`main()`'s two large locals to file scope (see below):
 
 ```
 0x4000  display file        (ULA bitmap / hi-res even columns)
 0x5800  attributes          (used by the ZX build, unused in hi-res)
 0x6000  hi-res odd columns  (free RAM on a Spectrum — no conflict)
 0x8000  program start (ORG)
-0xCF1C  end of image (__BSS_END_tail)
-        4,324 bytes free
-0xE000  IM2 vector table, I = 0xE0                      <- IM2_TABLE_BASE / IM2_VECTOR_PAGE in include/im2.h
-        257 bytes are architecturally required (0xE000-0xE100, one full page
+0xDE62  end of image (__BSS_END_tail) -- was 0xCF1C before `screen_t scr` and
+        `vtparse_t vt` moved from main()'s stack frame into BSS (+3,910 bytes)
+        3,998 bytes free
+0xEE00  IM2 vector table, I = 0xEE                      <- IM2_TABLE_BASE / IM2_VECTOR_PAGE in include/im2.h
+        257 bytes are architecturally required (0xEE00-0xEF00, one full page
         plus one byte for the worst-case vector read landing on the table's
         last byte). The installer writes exactly those 257 bytes with a
         single memset. The gate deliberately reserves one byte more than
-        that, 258 (0xE000-0xE101), as a margin against a future installer
+        that, 258 (0xEE00-0xEF01), as a margin against a future installer
         change that writes past its own boundary -- not because the code
         touches that 258th byte today.
-0xE1E1  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- IM2_TRAMPOLINE in include/im2.h
-        0xE1E4-0xEF3C = 3,417 bytes measured clear (see below), formerly
-        assumed clear to 0xFD57 based on __crt_stack_size alone
-0xEF3D  MEASURED low-water mark of real call/stack depth on target (this fix
-        wave; not a linker symbol) -- see the note below
+0xEFEF  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- IM2_TRAMPOLINE in include/im2.h
+        0xEFF2-0xFE8E = 3,741 bytes measured clear to the post-hoist low-water
+        mark below; 0xEFF2-0xFD57 = 3,430 bytes clear of the more
+        conservative __crt_stack_size-implied floor
 0xFD58  stack floor AS __crt_stack_size WOULD IMPLY (__register_sp 0xFF58
-        minus __crt_stack_size 0x0200) -- known now to understate real use
+        minus __crt_stack_size 0x0200) -- post-hoist, this is now the MORE
+        conservative of the two figures (see narrative below), not the less
+0xFE8F  MEASURED low-water mark of real call/stack depth on target, after the
+        hoist (im2-guard follow-up; not a linker symbol) -- see below
 0xFF58  stack seed
 ```
 
@@ -360,32 +364,81 @@ Two hazards follow, and both are addressed by D23:
    The base becomes a single named constant (`include/im2.h`), shared by the
    assembly and the gate script, so the two can never disagree.
 
-   **Chosen values (revised by the follow-up fix wave, 2026-07-27):** base
-   `0xE000` (`I = 0xE0`), fill `0xE1`, trampoline `0xE1E1`. An earlier version
-   of this branch used base `0xF900` (fill `0xFA`, trampoline `0xFAFA`), sized
-   purely against `__crt_stack_size` (512 bytes configured, not measured); a
-   fix-wave measurement on target (ZEsarUX ZRCP: fill a wide canary region,
-   drive the startup banner render plus several kilobytes of injected,
-   scroll-forcing text plus keypresses, then scan for the lowest touched byte)
-   found real call/stack depth reaching down to **0xEF3D** — deep enough that a
-   direct hexdump caught live plaintext from the injected session overwriting
-   the `0xF900` table itself while the program kept running. Both `0xF900` and
-   an interim `0xF000` fallback sit inside that measured range, so this branch
-   moves to `0xE000` instead, which the same measurement shows has 3,417 bytes
-   of real clearance below the trampoline and 4,324 bytes of image margin
-   above it. **This does not fix the underlying deep call chain** (most likely
-   in the render/scroll path); it only moves the table to where that chain, as
-   measured, does not currently reach. See the fix-wave report referenced from
-   this document's history for the full measurement writeup and raw evidence.
-   Re-verified on target after the move: table contents, the `JP` opcode at the
-   trampoline, `I=E0`, and a simulated keypress reaching `keybuf` through the
-   relocated interrupt.
+   **Chosen values, as of the im2-guard follow-up:** base `0xEE00`
+   (`I = 0xEE`), fill `0xEF`, trampoline `0xEFEF`. This is the third address
+   this table has held. A 2026-07-27 fix wave had moved it from an interim
+   `0xF900` (fill `0xFA`, trampoline `0xFAFA`, sized purely against
+   `__crt_stack_size` -- 512 bytes configured, not measured) to `0xE000` (fill
+   `0xE1`, trampoline `0xE1E1`), after a canary-fill measurement on target
+   found real call/stack depth reaching down to `0xEF3D` -- deep enough that a
+   direct hexdump caught live plaintext from an injected session overwriting
+   the `0xF900` table while the program kept running. That fix wave flagged
+   the "deep call chain" behind `0xEF3D` as a separate, unfixed problem, most
+   likely in the render/scroll path.
+
+   **It turned out to be one oversized stack frame, not a chain.** `main()`
+   (`src/main.c`) declared `screen_t scr` and `vtparse_t vt` as locals:
+   `screen_t` alone is `24 * 80` `cell_t` (3,840 bytes) plus its scalars, with
+   `vtparse_t` beside it, together accounting for nearly all of the measured
+   4,123 bytes (`0xFF58` seed down to `0xEF3D`). The im2-guard follow-up
+   hoisted both to file-scope statics in `main.c`, for the same reason
+   `render.c:100` keeps `row_glyphs`/`row_attrs`/`row_pixels` off the stack:
+   it turns stack depth the linker cannot see into BSS that
+   `tools/check_image_limit.py`'s `__BSS_END_tail` reading can. That grew the
+   image end from `0xCF1C` to `0xDE62` (+3,910 bytes) -- so the table has to
+   move again, this time because the image grew, not because the stack still
+   reaches as deep as it used to.
+
+   Remeasuring after the hoist (ZEsarUX ZRCP, same target: two full runs of
+   five passes each -- boot + banner render, ~2.6 KB of injected text forcing
+   scroll, a keypress burst, a heavier ~7 KB session with scroll-region
+   changes and insert/delete-line churn, a second keypress burst -- sampled
+   with ZRCP's `get-visualmem-written-dump` rather than a canary fill) found:
+   the boot pass in both runs showed *every* byte from the new image end
+   (`0xDE62`) to `0xFFFF` written 3-5 times, uniformly, regardless of session
+   content -- the Spectrum's own power-on RAM test, not program activity, and
+   excluded from the figures below. Past that artifact, the real low-water
+   mark measured identically in both runs at **0xFE8F**, about 201 bytes below
+   the `0xFF58` seed -- comfortably inside the 512-byte `__crt_stack_size`
+   budget, down from 4,123 measured bytes before the hoist. A third,
+   still-heavier pass (a full 24-row screen clear+redraw plus scroll-region
+   extremes, meant to check whether the mark trends deeper still, as it had
+   across passes in the prior fix wave) was started but did not finish in the
+   time available, so this measurement, though reproduced twice, is not proof
+   that `0xFE8F` is the program's absolute deepest reach.
+
+   Given that gap, `0xEE00` is chosen with margin against **both** figures,
+   not `0xFE8F` alone: it gives `0xEE00 - 0xDE62` = 3,998 bytes of image
+   margin, `0xFE8F - 0xEFF2` = 3,741 bytes of clearance below the measured
+   mark, and `0xFD58 - 0xEFF2` = 3,430 bytes of clearance below the more
+   conservative `__crt_stack_size`-implied floor -- comparable in scale to the
+   prior fix wave's `4,324` / `3,417` split, despite the image having grown by
+   nearly 4 KB since. See the hoist report referenced from this document's
+   history for the full measurement writeup and raw data. Re-verified on
+   target after the move: table contents, the `JP` opcode at the trampoline,
+   `I=EE`, and a simulated keypress reaching `keybuf` through the relocated
+   interrupt.
+
+   **The gate's stack-floor arithmetic is, for the first time, on the
+   conservative side of measured reality.** Before the hoist, the assumed
+   floor `0xFD58` (`__register_sp` minus `__crt_stack_size`) understated real
+   usage by roughly 3,900 bytes (measured: `0xEF3D`, well past `0xFD58`).
+   After the hoist, measured usage (`0xFE8F`) sits *above* (shallower than)
+   the assumed floor by 311 bytes (`0xFE8F - 0xFD58`). The 512-byte configured
+   allowance is no longer fiction the program blows through by roughly 8x --
+   it is now bigger than what two measured sessions actually used. Whether it
+   is bigger than what the untested heaviest session would use is the one
+   question this measurement does not answer; `tools/check_image_limit.py`'s
+   `stack_floor = __register_sp - __crt_stack_size` computation was left
+   unchanged rather than tightened on that open question.
 
 **The margin figures above are measured on this branch**, which already carries
 the 80-column build. `row_glyphs[80]`, `row_attrs[80]`, and `row_pixels[80]`
 account for the growth over the older 64-column `master` figure of 1,448 bytes;
-the real pre-relocation margin on this branch measures about 1,000 bytes, which
-is what motivates the move in this section rather than the older number.
+the real pre-relocation margin on this branch (before the D23 table ever
+moved) measured about 1,000 bytes -- a separate, older number from the
+`0xEE00` margins above, kept here only as the original motivation for moving
+the table out of the image's way at all.
 
 ---
 
