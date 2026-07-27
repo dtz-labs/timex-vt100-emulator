@@ -89,9 +89,6 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
 
     do {
         n = conn_rx_read(buf, (u8)(sizeof buf));
-        if (n != 0) {
-            screen_mark_cell(scr, scr->cy, scr->cx);  /* erase the previously rendered cursor */
-        }
         for (i = 0; i < n; ++i) {
             if (buf[i] == '\n' || (scr->wrap_pending && buf[i] >= 0x20u)) {
                 blit_flush(scr);
@@ -111,7 +108,6 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
             pump_vt_replies(vt);
         }
         if (n != 0) {
-            screen_mark_cell(scr, scr->cy, scr->cx);  /* draw the cursor at its new position */
             changed = 1;
         }
     } while (n != 0);
@@ -291,7 +287,7 @@ int main(void)
 
     /* Render everything to display. */
     blit_flush(&scr);
-    blit_cursor(&scr);
+    blit_cursor_toggle(&scr);
 #ifndef KEYBOARD_NO_IM2
     init_keyboard_interrupts();
 #endif
@@ -307,11 +303,12 @@ int main(void)
         }
         pump_keybuf_to_conn();
         conn_poll();
+        blit_cursor_toggle(&scr);          /* hide: the parser may move it */
         if (pump_conn(&vt, &scr)) {
             sync_keyboard_modes(&scr);
             blit_flush(&scr);
-            blit_cursor(&scr);
         }
+        blit_cursor_toggle(&scr);          /* show at its (possibly new) place */
         pump_vt_replies(&vt);
         conn_poll();
     }

@@ -6,7 +6,7 @@
  * scanline bytes), and render_row_bytes (a full 80-column scanline against a
  * reference painter) -- this branch's primary correctness evidence for the
  * 80-column packing arithmetic. Hardware-touching functions (blit_flush,
- * blit_cursor, in src/blit_hires.c) are verified on the emulator.
+ * blit_cursor_toggle, in src/blit_hires.c) are verified on the emulator.
  */
 #include <assert.h>
 #include <stdio.h>

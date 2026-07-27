@@ -36,10 +36,13 @@ void blit_flush(screen_t *s);
 u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n);
 
 /*
- * Render the cursor at the current screen position.
- * When MODE_CURSOR_VISIBLE is set, invert the cell at (cx, cy).
+ * XOR the cursor cell's six pixels in place. Idempotent in pairs: call once to
+ * show the cursor, once more to hide it, and the screen is bit-identical to
+ * before. Does NOT mark anything dirty -- that is the point. When
+ * MODE_CURSOR_VISIBLE is clear it does nothing, so pairs still balance.
+ *
  * Hardware-only.
  */
-void blit_cursor(const screen_t *s);
+void blit_cursor_toggle(const screen_t *s);
 
 #endif /* BLIT_H */

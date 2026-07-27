@@ -137,7 +137,7 @@ u8 blit_scroll_region(screen_t *s, u8 top, u8 bot, s8 n)
 }
 
 /* Hardware: invert the six pixels of the cursor cell, in place. */
-void blit_cursor(const screen_t *s)
+void blit_cursor_toggle(const screen_t *s)
 {
     u8 byte_idx, sh, mask0, mask1;
     u8 i;
