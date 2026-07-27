@@ -328,3 +328,38 @@ hoc, not committed to `tools/bench/` -- the same precedent as the
 "Function-call vs. inlined mapping/dirty-check" section above, which used an
 uncommitted `tools/bench` harness for its own isolated per-call
 microbenchmarks.
+
+## Task 10: image-size estimate vs. measured (not a T-state benchmark)
+
+A different metric from everything else in this file -- `check_image_limit.py`
+margin (bytes of ROM free before the IM2 vector table), not T-states -- but
+recorded here because it is the same kind of "estimate vs. measured, and what
+we did about the gap" data this file otherwise tracks, and a future reader
+comparing the task's estimate to reality should find the correction rather
+than the estimate.
+
+Task 10's brief estimated replacing the startup banner's two `'q'`-run string
+literals with a `COLS - 2` loop would free "roughly 400 bytes" (162 bytes of
+literal were actually removed). Measured on all four TAPs, both rewrites of
+`src/main.c`'s `demo_stream` **grew** the image instead:
+
+| Change | `build/term.tap` margin | vs. previous |
+|---|---:|---:|
+| Baseline (before Task 10) | 2514 | -- |
+| Rules only (`feed_hrule()`, single-array + sentinel-byte design) | 2464 | -50 |
+| Whole banner (`feed_hrule()` + `feed_row()`, SO/SI charset fix, shortened content) | 2214 | -250 more (-300 total) |
+
+Both regressions come from the same source: SDCC's per-call/per-branch
+overhead under `-clib=sdcc_iy` exceeds the literal bytes removed, for
+functions this small (consistent with the per-call costs measured elsewhere
+in this file, e.g. `screen_group_dirty()` ~550 T/call, `render_group_bytes()`
+~975 T/call -- a cycle cost, not a size one, but the same underlying
+"function calls are not free on this ABI" fact). The whole-banner rewrite
+adds one more function (`feed_row()`) and a cursor-position-driven padding
+loop, so the size cost compounds rather than cancels.
+
+All four TAPs still build and pass `check-image-limit` with ample margin
+(2214-4905 bytes) -- this is a correction to a size estimate, not a build
+failure. No further size optimization was attempted: the functional
+correctness goal (box closes flush and no line wraps, at both 40 and 80
+columns) was the point of the task, and the margin is nowhere near the gate.

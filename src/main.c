@@ -34,28 +34,61 @@
 #endif
 
 /*
- * RULE_TOP/RULE_BOTTOM are sentinel bytes standing in for the box's two
- * horizontal rules, which main()'s feed loop draws with feed_hrule() (below)
- * instead of a COLS-wide run of 'q' literals -- see feed_hrule for why. Both
- * codes are C0 values with no meaning to the VT parser (ground_byte's
- * `default: ignore` in vtparse.c), so the feed loop must intercept them
- * itself and never hand them to vt_feed; they are not escape sequences and
- * carry no other significance. The interior content lines keep their fixed
- * 80-column layout: shortening them for the 40-column ZX build is a separate
- * concern from closing the box, and out of scope here.
+ * RULE_TOP/RULE_BOTTOM/ROW_TITLE/ROW_SGR are sentinel bytes standing in for
+ * the box's two horizontal rules and two interior content lines, which
+ * main()'s feed loop routes to feed_hrule()/feed_row() (below) instead of
+ * COLS-wide literal text -- see those functions for why. All four codes are
+ * C0 values with no meaning to the VT parser (ground_byte's `default:
+ * ignore` in vtparse.c), so the feed loop must intercept them itself and
+ * never hand them to vt_feed; they are not escape sequences and carry no
+ * other significance.
+ *
+ * The two interior strings (row_title, row_sgr) are shared, unpadded text --
+ * feed_row() pads them to whichever COLS the build actually has. They must
+ * fit within COLS - 2 visible columns on the *narrower* build (38, at
+ * COLS=40u), since that is the tightest constraint either geometry imposes;
+ * a string that fits at 80 but wraps at 40 would be the same "looks broken
+ * at 40 columns" bug this rewrite exists to fix, just moved from the rules
+ * into the content. row_title (24 visible chars) and row_sgr (25, not
+ * counting its two SGR escape pairs, which feed_row measures around rather
+ * than counts -- see feed_row) both clear that with room to spare; the
+ * original row_title's "80 columns, TT3000 6x8 font" aside was dropped
+ * (it was also flatly wrong on the ZX build, which is not 80 columns) since
+ * the HW line printed after the box already states the actual width.
  */
 #define RULE_TOP    0x01u
 #define RULE_BOTTOM 0x02u
+#define ROW_TITLE   0x03u
+#define ROW_SGR     0x04u
 
+static const char row_title[] = "VT-102 TERMINAL EMULATOR";
+static const char row_sgr[]   = "   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test";
+
+/*
+ * G1 (not G0) is designated as DEC special graphics here, once, and stays
+ * that way for the program's whole run -- G0 stays the default ASCII
+ * (vt_init() never changes it). feed_hrule()/feed_row() toggle GL between
+ * the two with SO (0x0E, invoke G1) / SI (0x0F, invoke G0) around just the
+ * corner/rule/vertical-bar bytes, and always leave GL on G0 (ASCII) when
+ * they return. This replaces an earlier version that designated G0 itself
+ * as graphics (ESC(0) for the whole box, borders *and* interior text, then
+ * reset it once at the end (ESC(B) -- which meant every printable byte in
+ * 0x5F-0x7E inside the interior lines (most lowercase letters and some
+ * punctuation) was silently rendered as a DEC line-drawing glyph instead of
+ * its own letter, on both builds, the whole time the interior text was
+ * printed. Confirmed by a direct screen_t memory dump during Task 10's
+ * verification: 'l' inside "columns" rendered as a corner glyph, 'x' inside
+ * "6x8" as a vertical bar, etc. -- see charset_translate() in vtparse.c for
+ * the exact translation this must avoid applying to plain text.
+ */
 static const u8 demo_stream[] =
     "\x1b[2J"
     "\x1b[H"
-    "\x1b(0"
+    "\x1b)0"
     "\x01"
-    "x VT-102 TERMINAL EMULATOR                         80 columns, TT3000 6x8 font x\r\n"
-    "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test                                                     x\r\n"
+    "\x03"
+    "\x04"
     "\x02"
-    "\x1b(B"
     "\x1b[5;1H"
     "Version v" APP_VERSION_STR "  " APP_GIT_COMMIT "\r\n"
     "Built " APP_BUILD_DATE "\r\n"
@@ -120,32 +153,66 @@ static void vt_feed_text(vtparse_t *v, screen_t *s, const char *p)
 }
 
 /*
- * Draws one horizontal box rule: a corner, COLS - 2 DEC special-graphics
- * horizontal glyphs ('q'), the other corner, and an optional trailing CRLF
- * (the original literal's top rule ended the line; the bottom rule instead
- * ran straight into "\x1b(B"). A loop instead of a COLS-wide string literal
- * is what lets the same source close the box exactly at the right margin on
- * both the 80-column Timex build and the 40-column ZX build -- a literal
- * sized for one geometry would either fall short or overrun the other. Must
- * run with the DEC special graphics charset already selected (ESC(0),
- * selected once near the start of demo_stream and still active at both
- * RULE_TOP/RULE_BOTTOM sentinels), since 'q' only becomes the
- * horizontal-line glyph under that charset -- see charset_translate() in
- * vtparse.c.
+ * Draws one horizontal box rule: SO (invoke G1/graphics), a corner, COLS - 2
+ * DEC special-graphics horizontal glyphs ('q'), the other corner, SI (back to
+ * G0/ASCII), and an optional trailing CRLF (the original literal's top rule
+ * ended the line; the bottom rule instead ran straight into the next thing).
+ * A loop instead of a COLS-wide string literal is what lets the same source
+ * close the box exactly at the right margin on both the 80-column Timex
+ * build and the 40-column ZX build -- a literal sized for one geometry would
+ * either fall short or overrun the other. Always leaves GL on G0 (ASCII)
+ * when it returns, so whatever comes next -- another feed_row(), or plain
+ * text after the box -- does not need to know or care that this function
+ * used graphics glyphs internally.
  */
 static void feed_hrule(vtparse_t *v, screen_t *s, char left, char right, u8 crlf)
 {
     u8 i;
 
+    vt_feed(v, s, 0x0Eu);   /* SO: invoke G1 (graphics) into GL */
     vt_feed(v, s, (u8)left);
     for (i = 0; i < (u8)(COLS - 2u); ++i) {
         vt_feed(v, s, (u8)'q');
     }
     vt_feed(v, s, (u8)right);
+    vt_feed(v, s, 0x0Fu);   /* SI: invoke G0 (ASCII) into GL */
     if (crlf) {
         vt_feed(v, s, (u8)'\r');
         vt_feed(v, s, (u8)'\n');
     }
+}
+
+/*
+ * Draws one interior content line: a graphics vertical bar, `text` (plain
+ * ASCII, may embed SGR sequences), spaces padding out to column COLS - 1,
+ * a closing graphics vertical bar, then CRLF -- all COLS columns wide on
+ * either build, so the line never wraps and the closing bar always lands on
+ * the right margin.
+ *
+ * The padding loop compares against scr->cx (the cursor's actual column)
+ * rather than strlen(text), because `text` may contain SGR escape sequences
+ * (the REVERSE/UNDERLINE demo does) that vt_feed consumes without moving the
+ * cursor; measuring by strlen() would count those bytes as columns and pad
+ * too little. This relies on being called with the cursor at column 0 (true
+ * right after a preceding CRLF or CUP, which is how main() uses it) and on
+ * `text`'s visible width being at most COLS - 2 -- the caller's job, since
+ * this function has no way to detect an overlong string other than letting
+ * it overrun the right margin.
+ */
+static void feed_row(vtparse_t *v, screen_t *s, const char *text)
+{
+    vt_feed(v, s, 0x0Eu);   /* SO: left vertical bar in graphics */
+    vt_feed(v, s, (u8)'x');
+    vt_feed(v, s, 0x0Fu);   /* SI: interior text in plain ASCII */
+    vt_feed_text(v, s, text);
+    while (s->cx < (u8)(COLS - 1u)) {
+        vt_feed(v, s, (u8)' ');
+    }
+    vt_feed(v, s, 0x0Eu);   /* SO: right vertical bar in graphics */
+    vt_feed(v, s, (u8)'x');
+    vt_feed(v, s, 0x0Fu);   /* SI: back to ASCII for whatever follows */
+    vt_feed(v, s, (u8)'\r');
+    vt_feed(v, s, (u8)'\n');
 }
 
 static void pump_vt_replies(vtparse_t *vt)
@@ -394,9 +461,10 @@ int main(void)
 
     /* Feed demo stream through parser. Printable bytes and escape sequences
      * go through vt_feed one at a time as before; the RULE_TOP/RULE_BOTTOM
-     * sentinels instead call feed_hrule() so the box's horizontal rules are
-     * generated for the actual COLS width rather than baked into the
-     * literal at one fixed width. */
+     * and ROW_TITLE/ROW_SGR sentinels instead call feed_hrule()/feed_row()
+     * so the whole box -- rules and interior content alike -- is generated
+     * for the actual COLS width rather than baked into the literal at one
+     * fixed width. */
     while (demo_stream[i] != 0) {
         switch (demo_stream[i]) {
         case RULE_TOP:
@@ -404,6 +472,12 @@ int main(void)
             break;
         case RULE_BOTTOM:
             feed_hrule(&vt, &scr, 'm', 'j', 0);
+            break;
+        case ROW_TITLE:
+            feed_row(&vt, &scr, row_title);
+            break;
+        case ROW_SGR:
+            feed_row(&vt, &scr, row_sgr);
             break;
         default:
             vt_feed(&vt, &scr, demo_stream[i]);
