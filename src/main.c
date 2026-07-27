@@ -324,10 +324,18 @@ int main(void)
      * a tape load that costs minutes on real hardware. Refuse instead. Must
      * run before video_init: the probe writes port 0xFF, the display mode
      * register, and CAPS SHIFT is the documented bypass for clones whose port
-     * decoding fools the probe. */
+     * decoding fools the probe.
+     *
+     * machine_has_scld() documents (machine.h) that it must run with
+     * interrupts disabled, since it toggles port 0xFF -- so di/ei bracket
+     * only the probe itself, not video_clear() or anything after. If the
+     * guard fires, guard_refuse() never returns (it di's again, prints, and
+     * halts), so the ei below is reached only on a genuine Timex. */
+    intrinsic_di();
     if (!machine_has_scld() && !machine_caps_shift_held()) {
         guard_refuse();     /* prints and halts; never returns */
     }
+    intrinsic_ei();
 #endif
 
     /* Init hardware: hi-res white-on-black, clear screen. */

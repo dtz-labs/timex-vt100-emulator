@@ -63,11 +63,24 @@ endif
 ZCC ?= $(if $(ZCC_DETECTED),$(ZCC_DETECTED),zcc)
 Z88DK_TARGET ?= +zx
 Z88DK_CFLAGS ?= -SO3 -clib=sdcc_iy -iquote$(BUILD_DIR) -iquote$(CURDIR)/include
-# Both build targets ($(TAP) and $(IF1_TAP)) are the Timex build until Task 9
-# adds the ZX_SOURCES/ZX_DEFS build matrix and its own tap-zx/if1-zx targets.
-# TERM_TIMEX gates src/main.c's wrong-machine guard and its BANNER_HW string,
-# and matches the TERM_DEF test/run.sh already uses for the host suite.
-Z88DK_DEFS ?= -DTERM_TIMEX
+# Z88DK_DEFS is the user's overridable knob for extra defines (e.g. -DDEBUG),
+# left empty by default -- kept separate from TARGET_DEFS below so overriding
+# it (as `?=` invites: `make tap Z88DK_DEFS=-DDEBUG`) cannot silently drop the
+# define that selects which machine this build targets.
+Z88DK_DEFS ?=
+# TARGET_DEFS is this target's identity, not a user knob: it selects which of
+# src/main.c's #ifdef TERM_TIMEX / #else branches compiles in -- the guard
+# and BANNER_HW string among them. Deliberately `:=`, not `?=`: both build
+# targets ($(TAP) and $(IF1_TAP)) are the Timex build until Task 9 adds the
+# ZX_SOURCES build matrix and its own tap-zx/if1-zx targets with their own
+# TARGET_DEFS = -DTERM_ZX. If this were overridable, `make tap
+# Z88DK_DEFS=-DDEBUG` -- the ordinary way to use an overridable *_DEFS
+# variable -- would work fine, but the equivalent slip on this one would
+# silently build a Timex TAP that claims to be a ZX Spectrum (or vice versa)
+# and pass every check that does not deliberately look for the guard/banner.
+# Do not change this back to `?=`. Matches the TERM_DEF test/run.sh already
+# uses for the host suite.
+TARGET_DEFS := -DTERM_TIMEX
 Z88DK_LDFLAGS ?= -m
 Z88DK_PATH = $(if $(Z88DK_BIN),$(Z88DK_BIN):$(PATH),$(PATH))
 Z88DK_ENV = PATH="$(Z88DK_PATH)" $(if $(ZCCCFG),ZCCCFG="$(ZCCCFG)")
@@ -223,7 +236,7 @@ BUILD_DATE_H := $(BUILD_DIR)/build_date.h
 $(TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(TAP)"
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
-	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
 		$(SOURCES) -o "$(APP)" -create-app $(Z88DK_LDFLAGS)
 	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
 		$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
@@ -232,7 +245,7 @@ $(TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@echo "ZCC $(IF1_TAP)"
 	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
-	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
 		$(IF1_DEFS) $(SOURCES) -o "$(IF1_APP)" -create-app $(Z88DK_LDFLAGS)
 	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
 		$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
@@ -327,6 +340,8 @@ print-vars:
 	@echo "ZCCCFG=$(ZCCCFG)"
 	@echo "Z88DK_TARGET=$(Z88DK_TARGET)"
 	@echo "Z88DK_CFLAGS=$(Z88DK_CFLAGS)"
+	@echo "Z88DK_DEFS=$(Z88DK_DEFS)"
+	@echo "TARGET_DEFS=$(TARGET_DEFS)"
 	@echo "TIMEX_MACHINE=$(TIMEX_MACHINE)"
 	@echo "ZX=$(ZX)"
 
