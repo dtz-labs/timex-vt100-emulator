@@ -11,27 +11,37 @@ CFLAGS="-std=c99 -Wall -Wextra -Werror -I$ROOT/include"
 OUT="$ROOT/build/host"
 mkdir -p "$OUT"
 
-# Machine geometry under test. Task 8 adds a second pass here for the ZX
-# 40-column build (TERM_DEF=-DTERM_ZX, render_ula.c/blit_ula.c).
-TERM_DEF="-DTERM_TIMEX"
+# The pure core is width-parameterised at compile time, so it is compiled and
+# run once per geometry. This is what keeps 40-column wrapping, tabs and erase
+# behaviour under test without any runtime width plumbing.
+for TERM_DEF in -DTERM_TIMEX -DTERM_ZX; do
+    case "$TERM_DEF" in
+        -DTERM_TIMEX) GEOM_SRC="$ROOT/src/render_hires.c"; SUFFIX=timex ;;
+        -DTERM_ZX)    GEOM_SRC="$ROOT/src/render_ula.c";   SUFFIX=zx ;;
+    esac
+    echo "--- geometry: $TERM_DEF ---"
 
-# One executable per test_*.c, linked against the matching pure-logic sources.
-$CC $CFLAGS $TERM_DEF "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" -o "$OUT/test_screen"
-"$OUT/test_screen"
+    $CC $CFLAGS $TERM_DEF "$ROOT/test/test_screen.c" "$ROOT/src/screen.c" \
+        -o "$OUT/test_screen_$SUFFIX"
+    "$OUT/test_screen_$SUFFIX"
 
-$CC $CFLAGS $TERM_DEF "$ROOT/test/test_vtparse.c" "$ROOT/src/vtparse.c" "$ROOT/src/screen.c" -o "$OUT/test_vtparse"
-"$OUT/test_vtparse"
+    $CC $CFLAGS $TERM_DEF "$ROOT/test/test_vtparse.c" "$ROOT/src/vtparse.c" \
+        "$ROOT/src/screen.c" -o "$OUT/test_vtparse_$SUFFIX"
+    "$OUT/test_vtparse_$SUFFIX"
 
+    $CC $CFLAGS $TERM_DEF "$ROOT/test/test_render.c" "$ROOT/src/render.c" \
+        "$GEOM_SRC" "$ROOT/src/font.c" "$ROOT/src/hires.c" \
+        -o "$OUT/test_render_$SUFFIX"
+    "$OUT/test_render_$SUFFIX"
+done
+
+# Width-independent suites: compiled once, with either geometry define (they
+# do not look at COLS at all).
 $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
 "$OUT/test_hires"
 
 $CC $CFLAGS "$ROOT/test/test_font.c" "$ROOT/src/font.c" -o "$OUT/test_font"
 "$OUT/test_font"
-
-$CC $CFLAGS $TERM_DEF "$ROOT/test/test_render.c" "$ROOT/src/render.c" \
-    "$ROOT/src/render_hires.c" "$ROOT/src/font.c" "$ROOT/src/hires.c" \
-    -o "$OUT/test_render"
-"$OUT/test_render"
 
 $CC $CFLAGS "$ROOT/test/test_conn.c" "$ROOT/src/conn.c" -o "$OUT/test_conn"
 "$OUT/test_conn"

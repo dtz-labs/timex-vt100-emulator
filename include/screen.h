@@ -1,10 +1,11 @@
 /*
  * screen.h -- the terminal cell-grid model (pure logic, host-tested).
  *
- * An 80x24 grid of character cells with a cursor, a scroll region, the current
- * SGR attribute, and per-row bitmaps of dirty four-cell groups. The VT-100
- * parser (vtparse) drives this model; the hi-res renderer (render) blits the
- * dirty rows. This module
+ * A COLSx24 grid of character cells with a cursor, a scroll region, the current
+ * SGR attribute, and per-row bitmaps of dirty four-cell groups. COLS is 80 on
+ * the Timex hi-res build and 40 on the plain ZX Spectrum ULA build -- see
+ * below. The VT-100 parser (vtparse) drives this model; the renderer (render)
+ * blits the dirty rows. This module
  * knows nothing about hardware, escape sequences, or pixels -- it is the single
  * source of truth for "what the screen should show". (Design D3.)
  *
@@ -16,7 +17,21 @@
 
 #include "types.h"
 
+/*
+ * Exactly one machine define selects the geometry. The width is never passed
+ * separately, so a mismatched pair -- a ZX build told it has 80 columns --
+ * cannot be expressed.
+ */
+#if defined(TERM_TIMEX) && defined(TERM_ZX)
+#error "define exactly one of TERM_TIMEX / TERM_ZX, not both"
+#elif defined(TERM_TIMEX)
 #define COLS 80u
+#elif defined(TERM_ZX)
+#define COLS 40u
+#else
+#error "define exactly one of TERM_TIMEX / TERM_ZX"
+#endif
+
 #define ROWS 24u
 
 /*
