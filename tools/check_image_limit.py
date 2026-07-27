@@ -19,12 +19,14 @@ import sys
 
 SYMBOL_RE = re.compile(r"^(\S+)\s*=\s*\$([0-9A-Fa-f]+)")
 
-# The installer seeds one byte and then LDIRs 257 more, so it touches 258 bytes.
 # 257 is what IM2 architecturally requires (I*256 + any bus byte, worst case
-# 0x__FF, needs a high byte at +0x100); the extra byte is harmless but real, and
-# the gate must reserve what the code actually writes.
+# 0x__FF, needs a high byte at +0x100). The installer writes exactly that many
+# (a single memset of 257 bytes); the gate deliberately reserves one byte more
+# than that, 258, so a future installer change that writes one byte past the
+# 257 it owns today still has a byte of margin instead of silently fitting.
 IM2_TABLE_BYTES = 258
 IM2_TRAMPOLINE_BYTES = 3  # JP nnnn
+ROM_TOP = 0x4000  # first byte of RAM; anything below is ROM on a 48K/128K map
 
 REQUIRED = ("__BSS_END_tail", "__register_sp", "__crt_stack_size")
 
@@ -90,11 +92,48 @@ def analyse(map_path, im2_base, im2_fill):
             % (rep.image_end, im2_base, rep.image_end - im2_base)
         )
 
-    if im2_base <= rep.trampoline < rep.table_end:
+    # Compare the trampoline's full 3-byte span against the table, not just its
+    # first byte: a fill byte that starts the trampoline just below the table
+    # can still let its tail land inside it, and a first-byte-only test misses
+    # that overlap entirely.
+    if rep.trampoline < rep.table_end and trampoline_end > im2_base:
         rep.fail(
-            "IM2 trampoline 0x%04X (0x0101 * 0x%02X) lies inside the table "
+            "IM2 trampoline 0x%04X..0x%04X (0x0101 * 0x%02X) overlaps the table "
             "0x%04X..0x%04X; pick a fill byte outside the table's own range"
-            % (rep.trampoline, im2_fill, im2_base, rep.table_end - 1)
+            % (
+                rep.trampoline,
+                trampoline_end - 1,
+                im2_fill,
+                im2_base,
+                rep.table_end - 1,
+            )
+        )
+
+    # The trampoline address is derived from the fill byte, not chosen
+    # independently -- so a fill byte that looks fine against the table above
+    # can still place the trampoline somewhere that makes the whole scheme a
+    # no-op or a self-inflicted wound: below the image (still-live program
+    # bytes or the display file) or in ROM (the JP write never lands at all).
+    if rep.trampoline < rep.image_end:
+        rep.fail(
+            "IM2 trampoline 0x%04X (0x0101 * 0x%02X) lies below the image end "
+            "0x%04X: interrupt setup would write its JP into live program "
+            "bytes (or the display file below it) instead of free memory"
+            % (rep.trampoline, im2_fill, rep.image_end)
+        )
+    elif rep.trampoline == rep.image_end:
+        rep.fail(
+            "IM2 trampoline 0x%04X (0x0101 * 0x%02X) sits exactly at the image "
+            "end 0x%04X, leaving no margin: the gate refuses a zero-byte margin"
+            % (rep.trampoline, im2_fill, rep.image_end)
+        )
+
+    if rep.trampoline < ROM_TOP:
+        rep.fail(
+            "IM2 trampoline 0x%04X (0x0101 * 0x%02X) lies below 0x%04X, in "
+            "ROM: the installer's JP write there is a silent no-op and the "
+            "vector is never installed"
+            % (rep.trampoline, im2_fill, ROM_TOP)
         )
 
     # Like the image-vs-table boundary above, table_end and trampoline_end are
@@ -135,13 +174,13 @@ def main(argv=None):
         "--im2-base",
         required=True,
         type=lambda v: int(v, 0),
-        help="IM2 vector table base address, e.g. 0xD300",
+        help="IM2 vector table base address, e.g. 0xE000",
     )
     ap.add_argument(
         "--im2-fill",
         required=True,
         type=lambda v: int(v, 0),
-        help="byte the table is filled with, e.g. 0xD4",
+        help="byte the table is filled with, e.g. 0xE1",
     )
     args = ap.parse_args(argv)
 

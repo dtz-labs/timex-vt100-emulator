@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for tools/check_image_limit.py. Plain asserts, no pytest."""
 import os
+import re
 import sys
 import tempfile
 
@@ -110,6 +111,85 @@ def test_table_and_trampoline_must_not_overlap():
         check(any("trampoline" in p for p in rep.problems), "the problem names the trampoline")
 
 
+def test_table_and_trampoline_overlap_is_caught_by_its_tail_too():
+    with tempfile.TemporaryDirectory() as d:
+        # Fill 0xFE puts the trampoline at 0xFEFE, which *starts* below the
+        # table base 0xFF00 -- a first-byte-only check would miss it -- but its
+        # 3-byte span (0xFEFE..0xFF00) still reaches into the table's first byte.
+        rep = cil.analyse(write_map(d, "$CD58"), 0xFF00, 0xFE)
+        check(not rep.ok, "a trampoline whose tail reaches into the table fails")
+        check(any("trampoline" in p for p in rep.problems), "the problem names the trampoline")
+
+
+def test_fails_when_trampoline_lands_inside_the_image():
+    with tempfile.TemporaryDirectory() as d:
+        # Reviewer's first probe: fill 0x90 forces the trampoline to 0x9090,
+        # inside the image body (well below the real image end 0xCF1C).
+        rep = cil.analyse(write_map(d, "$CF1C"), 0xF900, 0x90)
+        check(not rep.ok, "a trampoline landing inside the image fails")
+        check(
+            any("trampoline" in p and "image" in p for p in rep.problems),
+            "the problem names both the trampoline and the image",
+        )
+
+
+def test_fails_when_trampoline_lands_in_the_display_file():
+    with tempfile.TemporaryDirectory() as d:
+        # Reviewer's second probe: fill 0x50 forces the trampoline to 0x5050,
+        # in the display file -- below the image, but not literally "the image".
+        rep = cil.analyse(write_map(d, "$CF1C"), 0xF900, 0x50)
+        check(not rep.ok, "a trampoline landing in the display file fails")
+        check(
+            any("trampoline" in p and "image" in p for p in rep.problems),
+            "the problem names the trampoline relative to the image end",
+        )
+
+
+def test_fails_when_trampoline_lands_in_rom():
+    with tempfile.TemporaryDirectory() as d:
+        # Reviewer's third probe: fill 0x10 forces the trampoline to 0x1010, in
+        # ROM, where the installer's JP write is simply a no-op.
+        rep = cil.analyse(write_map(d, "$CF1C"), 0xF900, 0x10)
+        check(not rep.ok, "a trampoline landing in ROM fails")
+        check(
+            any("ROM" in p for p in rep.problems),
+            "the problem names ROM",
+        )
+
+
+def test_shipped_im2_header_constants_pass_the_gate():
+    """Pins the constants tools/check_image_limit.py's docstring warns about
+    drifting: extracts IM2_TABLE_BASE / IM2_TABLE_FILL from include/im2.h with
+    the same sed-style pattern the Makefile uses, so a header reformat that
+    breaks that extraction fails a host test instead of only failing `make tap`
+    (which needs z88dk and so never runs in the host-tests CI job)."""
+    header_path = os.path.join(os.path.dirname(__file__), "..", "include", "im2.h")
+    base_re = re.compile(r"^#define\s+IM2_TABLE_BASE\s+(0x[0-9A-Fa-f]+)")
+    fill_re = re.compile(r"^#define\s+IM2_TABLE_FILL\s+(0x[0-9A-Fa-f]+)")
+    base_text = ""
+    fill_text = ""
+    with open(header_path, "r") as fh:
+        for line in fh:
+            m = base_re.match(line)
+            if m:
+                base_text = m.group(1)
+            m = fill_re.match(line)
+            if m:
+                fill_text = m.group(1)
+
+    check(base_text != "", "IM2_TABLE_BASE was extracted from the header")
+    check(fill_text != "", "IM2_TABLE_FILL was extracted from the header")
+
+    base = int(base_text, 0)
+    fill = int(fill_text, 0)
+    check(base == 0xE000, "IM2_TABLE_BASE matches the header's declared constant")
+    check(fill == 0xE1, "IM2_TABLE_FILL matches the header's declared constant")
+
+    with tempfile.TemporaryDirectory() as d:
+        rep = cil.analyse(write_map(d, "$CF1C"), base, fill)
+        check(rep.ok, "the gate accepts the shipped constants against a synthetic map")
+
+
 def main():
     test_parses_symbols()
     test_ok_when_image_fits()
@@ -119,6 +199,11 @@ def main():
     test_fails_when_trampoline_touches_the_stack_floor_exactly()
     test_rejects_a_misaligned_table_base()
     test_table_and_trampoline_must_not_overlap()
+    test_table_and_trampoline_overlap_is_caught_by_its_tail_too()
+    test_fails_when_trampoline_lands_inside_the_image()
+    test_fails_when_trampoline_lands_in_the_display_file()
+    test_fails_when_trampoline_lands_in_rom()
+    test_shipped_im2_header_constants_pass_the_gate()
     print("check_image_limit: %d checks passed" % CHECKS)
 
 
