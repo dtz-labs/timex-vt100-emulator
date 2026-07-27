@@ -16,8 +16,8 @@ mkdir -p "$OUT"
 # behaviour under test without any runtime width plumbing.
 for TERM_DEF in -DTERM_TIMEX -DTERM_ZX; do
     case "$TERM_DEF" in
-        -DTERM_TIMEX) GEOM_SRC="$ROOT/src/render_hires.c"; SUFFIX=timex ;;
-        -DTERM_ZX)    GEOM_SRC="$ROOT/src/render_ula.c";   SUFFIX=zx ;;
+        -DTERM_TIMEX) GEOM_SRC="$ROOT/src/render_hires.c"; HIRES_SRC="$ROOT/src/hires.c"; SUFFIX=timex ;;
+        -DTERM_ZX)    GEOM_SRC="$ROOT/src/render_ula.c";   HIRES_SRC="";                  SUFFIX=zx ;;
     esac
     echo "--- geometry: $TERM_DEF ---"
 
@@ -29,14 +29,19 @@ for TERM_DEF in -DTERM_TIMEX -DTERM_ZX; do
         "$ROOT/src/screen.c" -o "$OUT/test_vtparse_$SUFFIX"
     "$OUT/test_vtparse_$SUFFIX"
 
+    # src/hires.c is only linked in for the Timex pass: nothing in the ZX
+    # pass's test_render references hires_addr (blit_hires.c is the only
+    # caller, and it is target-only, never host-compiled).
     $CC $CFLAGS $TERM_DEF "$ROOT/test/test_render.c" "$ROOT/src/render.c" \
-        "$GEOM_SRC" "$ROOT/src/font.c" "$ROOT/src/hires.c" \
+        "$GEOM_SRC" "$ROOT/src/font.c" $HIRES_SRC \
         -o "$OUT/test_render_$SUFFIX"
     "$OUT/test_render_$SUFFIX"
 done
 
-# Width-independent suites: compiled once, with either geometry define (they
-# do not look at COLS at all).
+# Width-independent suites: compiled once, with no machine define at all --
+# correct because none of them include screen.h, so its
+# TERM_TIMEX/TERM_ZX #error guard (which needs exactly one of the two) never
+# triggers.
 $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
 "$OUT/test_hires"
 

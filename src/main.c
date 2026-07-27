@@ -33,14 +33,28 @@
 #define BANNER_HW "ZX Spectrum (ULA)  40x24"
 #endif
 
+/*
+ * RULE_TOP/RULE_BOTTOM are sentinel bytes standing in for the box's two
+ * horizontal rules, which main()'s feed loop draws with feed_hrule() (below)
+ * instead of a COLS-wide run of 'q' literals -- see feed_hrule for why. Both
+ * codes are C0 values with no meaning to the VT parser (ground_byte's
+ * `default: ignore` in vtparse.c), so the feed loop must intercept them
+ * itself and never hand them to vt_feed; they are not escape sequences and
+ * carry no other significance. The interior content lines keep their fixed
+ * 80-column layout: shortening them for the 40-column ZX build is a separate
+ * concern from closing the box, and out of scope here.
+ */
+#define RULE_TOP    0x01u
+#define RULE_BOTTOM 0x02u
+
 static const u8 demo_stream[] =
     "\x1b[2J"
     "\x1b[H"
     "\x1b(0"
-    "lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk\r\n"
+    "\x01"
     "x VT-102 TERMINAL EMULATOR                         80 columns, TT3000 6x8 font x\r\n"
     "x   \x1b[7mREVERSE\x1b[0m \x1b[4mUNDERLINE\x1b[0m test                                                     x\r\n"
-    "mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj"
+    "\x02"
     "\x1b(B"
     "\x1b[5;1H"
     "Version v" APP_VERSION_STR "  " APP_GIT_COMMIT "\r\n"
@@ -95,13 +109,42 @@ guard_msg:
 }
 #endif
 
-/* Beside the existing demo_stream feed loop in main(): feeds a NUL-terminated
+/* Used after the demo_stream feed loop in main(): feeds a NUL-terminated
  * C string through the parser one byte at a time. */
 static void vt_feed_text(vtparse_t *v, screen_t *s, const char *p)
 {
     while (*p != '\0') {
         vt_feed(v, s, (u8)*p);
         ++p;
+    }
+}
+
+/*
+ * Draws one horizontal box rule: a corner, COLS - 2 DEC special-graphics
+ * horizontal glyphs ('q'), the other corner, and an optional trailing CRLF
+ * (the original literal's top rule ended the line; the bottom rule instead
+ * ran straight into "\x1b(B"). A loop instead of a COLS-wide string literal
+ * is what lets the same source close the box exactly at the right margin on
+ * both the 80-column Timex build and the 40-column ZX build -- a literal
+ * sized for one geometry would either fall short or overrun the other. Must
+ * run with the DEC special graphics charset already selected (ESC(0),
+ * selected once near the start of demo_stream and still active at both
+ * RULE_TOP/RULE_BOTTOM sentinels), since 'q' only becomes the
+ * horizontal-line glyph under that charset -- see charset_translate() in
+ * vtparse.c.
+ */
+static void feed_hrule(vtparse_t *v, screen_t *s, char left, char right, u8 crlf)
+{
+    u8 i;
+
+    vt_feed(v, s, (u8)left);
+    for (i = 0; i < (u8)(COLS - 2u); ++i) {
+        vt_feed(v, s, (u8)'q');
+    }
+    vt_feed(v, s, (u8)right);
+    if (crlf) {
+        vt_feed(v, s, (u8)'\r');
+        vt_feed(v, s, (u8)'\n');
     }
 }
 
@@ -349,9 +392,23 @@ int main(void)
     keybuf_init();
     sync_keyboard_modes(&scr);
 
-    /* Feed demo stream through parser. */
+    /* Feed demo stream through parser. Printable bytes and escape sequences
+     * go through vt_feed one at a time as before; the RULE_TOP/RULE_BOTTOM
+     * sentinels instead call feed_hrule() so the box's horizontal rules are
+     * generated for the actual COLS width rather than baked into the
+     * literal at one fixed width. */
     while (demo_stream[i] != 0) {
-        vt_feed(&vt, &scr, demo_stream[i]);
+        switch (demo_stream[i]) {
+        case RULE_TOP:
+            feed_hrule(&vt, &scr, 'l', 'k', 1);
+            break;
+        case RULE_BOTTOM:
+            feed_hrule(&vt, &scr, 'm', 'j', 0);
+            break;
+        default:
+            vt_feed(&vt, &scr, demo_stream[i]);
+            break;
+        }
         ++i;
     }
 

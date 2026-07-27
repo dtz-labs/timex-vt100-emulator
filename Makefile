@@ -108,6 +108,10 @@ TIMEX_MACHINE ?= TC2048
 ZRCP_PORT ?= 10001
 ZRCP_HOST ?= 127.0.0.1
 TERMINFO_SRC ?= terminfo/timex-vt102.terminfo
+TERMINFO_ZX_SRC ?= terminfo/zx-vt102.terminfo
+# Both entries, so a malformed one fails terminfo-check/install-terminfo
+# instead of only ever exercising the Timex one.
+TERMINFO_SRCS := $(TERMINFO_SRC) $(TERMINFO_ZX_SRC)
 TERMINFO_DIR ?= $(HOME)/.terminfo
 
 # Explicit, not a wildcard: render_hires.c/render_ula.c and blit_hires.c/
@@ -226,8 +230,8 @@ ci: host-test python-check terminfo-check
 python-check:
 	python3 -m py_compile tools/*.py test/zesarux_smoke.py test/test_check_image_limit.py
 
-terminfo-check: $(TERMINFO_SRC)
-	tic -c -x "$(TERMINFO_SRC)"
+terminfo-check: $(TERMINFO_SRCS)
+	@for f in $(TERMINFO_SRCS); do tic -c -x "$$f" || exit 1; done
 
 smoke: $(TAP) check-zesarux
 	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py
@@ -247,9 +251,9 @@ check-image-limit:
 	@test -f "$(ZX_IF1_MAP)" || { echo "$(ZX_IF1_MAP) not found; build $(ZX_IF1_TAP) first"; exit 1; }
 	$(CHECK_IMAGE_LIMIT) "$(ZX_IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 
-install-terminfo: $(TERMINFO_SRC)
+install-terminfo: $(TERMINFO_SRCS)
 	@command -v tic >/dev/null 2>&1 || { echo "tic not found"; exit 127; }
-	tic -x -o "$(TERMINFO_DIR)" "$(TERMINFO_SRC)"
+	@for f in $(TERMINFO_SRCS); do tic -x -o "$(TERMINFO_DIR)" "$$f" || exit 1; done
 
 terminfo: install-terminfo
 
@@ -418,6 +422,7 @@ print-vars:
 	@echo "ZRCP_TERM=$(ZRCP_TERM)"
 	@echo "ZRCP_CMD=$(ZRCP_CMD)"
 	@echo "TERMINFO_SRC=$(TERMINFO_SRC)"
+	@echo "TERMINFO_ZX_SRC=$(TERMINFO_ZX_SRC)"
 	@echo "TERMINFO_DIR=$(TERMINFO_DIR)"
 	@echo "Z88DK=$(Z88DK)"
 	@echo "Z88DK_HOME=$(Z88DK_HOME)"
