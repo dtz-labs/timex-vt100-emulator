@@ -21,4 +21,20 @@
  * to pass here. */
 u16 ula_addr(u8 col, u8 prow);
 
+/* Base address of the ULA display file. Mirrors HIRES_FILE0/1 (hires.h) so
+ * src/blit_ula.c can compute ULA_FILE + offset the same way blit_hires.c
+ * computes HIRES_FILE0/1 + offset. */
+#define ULA_FILE 0x4000u
+
+/*
+ * Scanline-byte OFFSET (from ULA_FILE, not a full address -- there is no
+ * column here) of pixel scanline `scanline` (0..7) of text row `row` (0..23).
+ * Identical formula to hires_row_scanline_offset() (hires.h/hires.c): the ZX
+ * "thirds" interleave is the same inside the ULA file as it is inside each
+ * hi-res file. Factored out (Task 9) so src/blit_ula.c's row loop can compute
+ * the 8 scanline offsets once per row, before its per-group loop, exactly as
+ * blit_hires.c does.
+ */
+u16 ula_row_scanline_offset(u8 row, u8 scanline);
+
 #endif /* ULA_H */

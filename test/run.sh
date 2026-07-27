@@ -40,6 +40,9 @@ done
 $CC $CFLAGS "$ROOT/test/test_hires.c" "$ROOT/src/hires.c" -o "$OUT/test_hires"
 "$OUT/test_hires"
 
+$CC $CFLAGS "$ROOT/test/test_ula.c" "$ROOT/src/ula.c" -o "$OUT/test_ula"
+"$OUT/test_ula"
+
 $CC $CFLAGS "$ROOT/test/test_font.c" "$ROOT/src/font.c" -o "$OUT/test_font"
 "$OUT/test_font"
 

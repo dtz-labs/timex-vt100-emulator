@@ -33,10 +33,19 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
  *
  * Four cells is 24 px is exactly three CONSECUTIVE scanline bytes here, all in
  * the single ULA display file -- no even/odd file split to track. This is the
- * single readable definition of the ULA group-to-byte mapping; Task 9's
- * blit_ula.c decides fresh whether to call it or duplicate it (see the
- * CONSTRAINT comment in render_geom.h and the DUPLICATED FORMULAS comments in
- * src/blit_hires.c for why the hi-res blitter chose to duplicate).
+ * single readable definition of the ULA group-to-byte mapping and the one
+ * host tests exercise (test_group_byte_mapping, test/test_render.c).
+ *
+ * CONSTRAINT for anyone changing this formula: src/blit_ula.c's
+ * blit_row_groups() hand-copies this exact `idx0 = 1 + 3*g` arithmetic
+ * inline. Task 9 measured calling this function (and screen_group_dirty())
+ * at group granularity against duplicating it: 130,730 T vs. 143,181 T for a
+ * full 10-group fast-path row, +12,451 T (~9.5%) -- see
+ * docs/perf/benchmarks.md, "ULA blitter: duplicate vs. call (Task 9)".
+ * blit_ula.c cannot be host-compiled (absolute ULA_FILE address), so
+ * test/run.sh will NOT catch a divergence between that copy and this
+ * function if you change this without updating both. Grep for "DUPLICATED
+ * FORMULAS" in blit_ula.c before touching this.
  */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3)
 {

@@ -12,18 +12,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Scanline-byte offset (from HIRES_FILE0/1) of pixel scanline `scanline`
- * (0..7) of text row `row`. Shared by the group blitter below and the
- * scroll primitives further down this file. */
-static u16 row_scanline_offset(u8 row, u8 scanline)
-{
-    u8 prow = (u8)((row << 3) + scanline);
-
-    return (u16)(((u16)(prow & 0xC0u) << 5)
-               | ((u16)(prow & 0x07u) << 8)
-               | ((u16)(prow & 0x38u) << 2));
-}
-
 /* True when every cell of `row` is space/attr-0 -- the block-clear fast path
  * can then skip the font entirely. */
 static u8 blit_row_is_blank(const screen_t *s, u8 row)
@@ -48,7 +36,7 @@ static void blit_row_clear(u8 row)
     u8 i;
 
     for (i = 0; i < 8u; ++i) {
-        u16 off = row_scanline_offset(row, i);
+        u16 off = hires_row_scanline_offset(row, i);
         u8 *ev = (u8 *)(uintptr_t)(HIRES_FILE0 + off);
         u8 *od = (u8 *)(uintptr_t)(HIRES_FILE1 + off);
 
@@ -87,7 +75,7 @@ static void blit_row_groups(const screen_t *s, u8 row)
     u8 g, i;
 
     for (i = 0; i < 8u; ++i) {
-        offs[i] = row_scanline_offset(row, i);
+        offs[i] = hires_row_scanline_offset(row, i);
     }
 
     for (g = 0; g < DIRTY_GROUPS; ++g) {
@@ -211,19 +199,49 @@ void blit_flush(screen_t *s)
     }
 }
 
+/*
+ * DUPLICATED FORMULA -- KNOWN, MEASURED, DELIBERATE. Same formula as
+ * hires_row_scanline_offset() (src/hires.c), copied here rather than called.
+ *
+ * blit_row_groups()/blit_row_clear() above DO call hires_row_scanline_offset()
+ * (Task 9 moved the original blit_hires.c-local static function there so
+ * src/ula.c could share the identical "thirds" formula): those two call it at
+ * most 8 times per row, and that measured as a negligible ~1,000 T/row
+ * (row_normal 267,267 -> 268,283 T; see docs/perf/benchmarks.md). The scroll
+ * primitives below are a different story: scroll_file_up_one/down_one call
+ * it up to 2x per (row, scanline) pair, x2 files, over a 23-row region --
+ * roughly 750 calls for one blit_scroll_region() -- and switching those calls
+ * to the real cross-TU function measured as +95,504 T (680,099 -> 775,603 T,
+ * ~14%) on `scroll_vram`, a path Tasks 3/4 already optimised and this task
+ * has no business regressing. Reverted to a local duplicate for exactly this
+ * loop; see docs/perf/benchmarks.md, "Scanline-offset call vs. duplicate in
+ * the scroll path (Task 9)" for the numbers. Keep this in sync with
+ * hires_row_scanline_offset() (src/hires.c) and hires_addr()'s own offset
+ * math if the "thirds" formula ever changes -- test/run.sh cannot catch a
+ * divergence here, since this file cannot be host-compiled.
+ */
+static u16 scroll_scanline_offset(u8 row, u8 scanline)
+{
+    u8 prow = (u8)((row << 3) + scanline);
+
+    return (u16)(((u16)(prow & 0xC0u) << 5)
+               | ((u16)(prow & 0x07u) << 8)
+               | ((u16)(prow & 0x38u) << 2));
+}
+
 static void scroll_file_up_one(u16 base, u8 top, u8 bot)
 {
     u8 row, scanline;
 
     for (row = top; row < bot; ++row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(base + row_scanline_offset((u8)(row + 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(row, scanline));
+            const u8 *src = (const u8 *)(uintptr_t)(base + scroll_scanline_offset((u8)(row + 1u), scanline));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(bot, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(bot, scanline));
         memset(dst, 0, 32u);
     }
 }
@@ -234,13 +252,13 @@ static void scroll_file_down_one(u16 base, u8 top, u8 bot)
 
     for (row = bot; row > top; --row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(base + row_scanline_offset((u8)(row - 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(row, scanline));
+            const u8 *src = (const u8 *)(uintptr_t)(base + scroll_scanline_offset((u8)(row - 1u), scanline));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(top, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(top, scanline));
         memset(dst, 0, 32u);
     }
 }

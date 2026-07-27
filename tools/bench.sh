@@ -58,12 +58,16 @@ command -v z88dk-ticks >/dev/null 2>&1 || { echo "z88dk-ticks not found on PATH.
 echo "compiler: $(zcc 2>&1 | head -1)"
 echo "see docs/perf/benchmarks.md for the recorded reference numbers"
 
+# -DTERM_TIMEX: screen.h requires exactly one of TERM_TIMEX/TERM_ZX since the
+# COLS=80/40 split (see include/screen.h); this harness only ever measures the
+# Timex 80-column geometry (render_hires.c/blit_hires.c below), so that's the
+# one it defines.
 PROJECT_SOURCES="$ROOT/src/screen.c $ROOT/src/render.c $ROOT/src/render_hires.c $ROOT/src/blit_hires.c $ROOT/src/hires.c $ROOT/src/font.c $BENCH_SRC/bench_common.c"
 
 for path in row_normal row_attrs row_blank scroll_model scroll_vram; do
     printf '%-14s ' "$path"
 
-    zcc +zx -SO3 -clib=sdcc_iy -iquote"$ROOT/include" \
+    zcc +zx -SO3 -clib=sdcc_iy -iquote"$ROOT/include" -DTERM_TIMEX \
         "$BENCH_SRC/bench_$path.c" $PROJECT_SOURCES \
         -o "$OUT/bench_$path" -create-app -m >"$OUT/bench_$path.build.log" 2>&1 \
         || { echo "BUILD FAILED (see $OUT/bench_$path.build.log)"; exit 1; }

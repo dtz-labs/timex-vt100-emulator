@@ -37,13 +37,15 @@ void screen_clear_marks(screen_t *s, u8 row)
 
 /*
  * CONSTRAINT for anyone changing this bit test: src/blit_hires.c's
- * blit_row_groups() hand-copies this exact expression inline, for measured
- * hot-path performance (see docs/perf/benchmarks.md, "Function-call vs.
- * inlined mapping/dirty-check"). blit_hires.c cannot be host-compiled
- * (absolute HIRES_FILE0/1 addresses), so test/run.sh will NOT catch a
- * divergence between that copy and this function if you change this
- * without updating both. Grep for "DUPLICATED FORMULAS" in blit_hires.c
- * before touching this.
+ * blit_row_groups() AND src/blit_ula.c's blit_row_groups() both hand-copy
+ * this exact expression inline, for measured hot-path performance (see
+ * docs/perf/benchmarks.md, "Function-call vs. inlined mapping/dirty-check"
+ * for the Timex measurement and "ULA blitter: duplicate vs. call (Task 9)"
+ * for the ULA one). Neither blit_hires.c nor blit_ula.c can be host-compiled
+ * (absolute HIRES_FILE0/1/ULA_FILE addresses), so test/run.sh will NOT catch
+ * a divergence between either copy and this function if you change this
+ * without updating both. Grep for "DUPLICATED FORMULAS" in blit_hires.c and
+ * blit_ula.c before touching this.
  */
 u8 screen_group_dirty(const screen_t *s, u8 row, u8 group)
 {

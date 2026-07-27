@@ -47,18 +47,21 @@ jobs:
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git_commit="${GITHUB_SHA::12}"
           # z88dk/z88dk:latest is an Alpine image with no python3, so the IM2
-          # image-limit gate cannot run inside `make tap if1` here -- it runs
-          # as its own step below, on the runner, against the .map files this
-          # step produces.
+          # image-limit gate cannot run inside `make tap if1 tap-zx if1-zx`
+          # here -- it runs as its own step below, on the runner, against the
+          # .map files this step produces. Task 9 added the ZX build matrix
+          # (tap-zx/if1-zx); all four targets are built and gated here.
           docker run --rm -v "$PWD":/src -w /src \
             -e VERSION=ci \
             -e BUILD_DATE="$build_date" \
             -e GIT_COMMIT="$git_commit" \
             -e SKIP_IMAGE_LIMIT_CHECK=1 \
-            z88dk/z88dk:latest make tap if1
+            z88dk/z88dk:latest make tap if1 tap-zx if1-zx
           mkdir -p dist
           cp build/term.tap dist/zx-vt102-terminal-ci.tap
           cp build/term-if1.tap dist/zx-vt102-terminal-ci-if1.tap
+          cp build/term-zx.tap dist/zx-vt102-terminal-ci-zx.tap
+          cp build/term-zx-if1.tap dist/zx-vt102-terminal-ci-zx-if1.tap
           ls -l dist
 
       - name: Check IM2 image limit (outside the container)

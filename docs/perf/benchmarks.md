@@ -222,3 +222,109 @@ If a future editor changes either formula, both `CONSTRAINT` comments and
 the `blit_hires.c` copy will be visible from the definition site, which is
 the best available safety net given `blit_hires.c` is structurally
 unreachable from the host test suite.
+
+## Task 9: moving `row_scanline_offset` out of `blit_hires.c`
+
+Task 9 moved the row-scanline "thirds" offset formula (previously a
+`blit_hires.c`-local `static` function) into `src/hires.c`
+(`hires_row_scanline_offset()`) and `src/ula.c` (`ula_row_scanline_offset()`)
+as pure, host-tested functions (`test/test_hires.c`, `test/test_ula.c`), so
+`src/blit_ula.c` would have one readable, tested source for the identical ZX
+"thirds" interleave instead of a third hand-copy. `blit_hires.c`'s
+`blit_row_groups()`/`blit_row_clear()` were updated to call
+`hires_row_scanline_offset()` instead of keeping their own copy.
+
+This is a call, not a duplication, so it was re-measured with
+`tools/bench.sh` (same harness, same compiler, `zcc ... v23854-4d530b6eb7-...`)
+to check the "call vs. duplicate" question was not silently decided by
+inertia:
+
+| Path | Before (local `static`) | After (calls `hires_row_scanline_offset()`) | Delta |
+|---|---:|---:|---:|
+| row_normal | 267,267 | 268,283 | +1,016 T (+0.38%) |
+| row_attrs | 549,093 | 550,109 | +1,016 T (+0.19%) |
+| row_blank | 40,198 | 41,214 | +1,016 T (+2.5%) |
+| scroll_model | 101,508 | 101,533 | +25 T (noise; `scroll_model` calls only `screen_scroll()`, which never touches this formula) |
+| **scroll_vram** | **680,099** | **775,603** | **+95,504 T (+14.0%)** |
+
+`blit_row_groups()`/`blit_row_clear()` call the shared function at most 8
+times per row (the offsets are precomputed once, before the group loop --
+see this file's earlier sections), so the row paths' ~1,016 T cost is the
+same small, disclosed, per-call price as everywhere else in this document
+and was accepted.
+
+`scroll_vram` (`blit_scroll_region()` over the full 24-row region) is a
+different story: `scroll_file_up_one()`/`scroll_file_down_one()` call the
+offset formula up to 2x per `(row, scanline)` pair, x2 display files, over a
+23-row region -- roughly 750 calls for one `blit_scroll_region()` call. A
+plain move of the call site, taken at face value, would have silently
+regressed a path Tasks 3/4 already spent effort optimising (680,099 T, see
+"Before"/"After" tables above) by 14% -- an unrelated build-matrix task
+quietly undoing prior optimisation work.
+
+**Decision: reverted the scroll primitives to a local, duplicated formula**
+(`scroll_scanline_offset()`, marked `DUPLICATED FORMULA -- KNOWN, MEASURED,
+DELIBERATE` in `src/blit_hires.c`, cross-referencing
+`hires_row_scanline_offset()`), recovering `scroll_vram` to exactly 680,099 T
+(confirmed by rerunning `tools/bench.sh` after the revert -- see the numbers
+in the "current" run below). The row-groups call sites keep calling the
+shared, host-tested function; only the scroll loop -- the one call site
+where the per-call cost multiplies into a double-digit percentage -- keeps
+its own copy.
+
+Current (`tools/bench.sh`, same compiler build, after the scroll-path revert):
+
+| Path | T-states |
+|---|---:|
+| row_normal | 268,283 |
+| row_attrs | 550,109 |
+| row_blank | 41,214 |
+| scroll_model | 101,533 |
+| scroll_vram | 680,099 |
+
+## ULA blitter: duplicate vs. call (Task 9)
+
+`src/blit_ula.c`'s `blit_row_groups()` needed the same decision
+`blit_hires.c` made in the section above, but the brief explicitly asked for
+it to be decided fresh rather than assumed: the ULA mapping is materially
+simpler (three consecutive bytes in one display file, no even/odd branch),
+so calling `screen_group_dirty()` + `render_group_bytes()` (src/render_ula.c)
+at group granularity might plausibly have been cheap enough to keep as the
+single source of truth.
+
+Measured with an ad hoc `z88dk-ticks` harness mirroring
+`tools/bench/bench_row_normal.c` (one dirty row, 40 cells, `attr == 0`,
+`-DTERM_ZX`), comparing two full implementations of `blit_ula.c`: one with
+the group-index arithmetic (`idx0 = 1 + 3*g`) and the dirty-bit test
+hand-duplicated inline (mirroring `blit_hires.c`'s shape), one calling
+`screen_group_dirty()` + `render_group_bytes()` once per group (10
+groups/row for the 40-column build):
+
+| Variant | row_normal T-states (40-column build) |
+|---|---:|
+| Inlined/duplicated formulas (shipped) | 130,730 |
+| Real calls to `screen_group_dirty()` + `render_group_bytes()` (group granularity) | 143,181 |
+
+Difference: **+12,451 T, ~9.5%**. Same deterministic-cost conclusion as the
+Timex measurement above (there +19,115 T/~7.2% over 20 groups; here +12,451
+T/~9.5% over 10 groups -- consistent with the same per-call SDCC-ABI
+overhead applied to half as many groups, landing a comparable percentage
+because the base row cost is also roughly halved at 40 columns).
+
+**Decision: kept the inlined/duplicated formulas (130,730 T)**, for the same
+reasoning as `blit_hires.c`: ~9.5% is a real, systematic, reproducible cost
+(this emulator has zero run-to-run variance), not something to trade away for
+a maintainability benefit that is instead obtained by making the duplication
+impossible to miss -- `src/render_ula.c` (`render_group_bytes`) and
+`include/render_geom.h` now carry `CONSTRAINT` comments pointing at
+`src/blit_ula.c`'s copy (mirroring the existing `blit_hires.c` ones), and
+`include/screen.h`/`src/screen.c` (`screen_group_dirty`) now name both
+`blit_hires.c` and `blit_ula.c` as hand-copies. Grep for "DUPLICATED
+FORMULAS" in `src/blit_ula.c`.
+
+The measurement harness (two full `blit_ula.c` variants plus a
+`bench_row_normal_zx.c` mirroring `tools/bench/bench_row_normal.c`) was ad
+hoc, not committed to `tools/bench/` -- the same precedent as the
+"Function-call vs. inlined mapping/dirty-check" section above, which used an
+uncommitted `tools/bench` harness for its own isolated per-call
+microbenchmarks.
