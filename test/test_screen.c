@@ -523,6 +523,16 @@ static void test_dirty_groups(void)
     CHECK(screen_row_dirty(&s, 0) != 0);
     CHECK(screen_group_dirty(&s, 0, 0) != 0);
     CHECK(screen_group_dirty(&s, 0, DIRTY_GROUPS - 1u) != 0);
+
+    /* Column 3 is the last cell of group 0; the cursor advances into group 1.
+     * If the mark were taken after the advance, this would dirty group 1 --
+     * so this is the case that actually pins the ordering. */
+    screen_init(&s);
+    screen_clear_marks(&s, 0);
+    screen_cup(&s, 0, 3);
+    screen_putc(&s, 'X');
+    CHECK(screen_group_dirty(&s, 0, 0) != 0);
+    CHECK(screen_group_dirty(&s, 0, 1) == 0);
 }
 
 static void test_scroll_migrates_dirty_groups(void)
@@ -547,6 +557,51 @@ static void test_scroll_migrates_dirty_groups(void)
     CHECK(screen_row_dirty(&s, ROWS - 1u) != 0);
 }
 
+static void test_scroll_moves_content_exactly(void)
+{
+    screen_t s;
+    u8 r;
+
+    /* Fill each row with a distinguishable character, then scroll and check
+     * that content moved by exactly the right distance and freed rows blanked.
+     * This must hold for a partial region too, which is where an off-by-one in
+     * a block move would hide. */
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_cup(&s, r, 0);
+        screen_putc(&s, (u8)('A' + (r % 26u)));
+    }
+
+    screen_set_scroll_region(&s, 2, 8);
+    screen_cup(&s, 8, 0);
+    screen_scroll(&s, 1);
+
+    CHECK(s.cells[2][0].ch == (u8)('A' + 3u));   /* row 3 moved to row 2 */
+    CHECK(s.cells[7][0].ch == (u8)('A' + 8u));   /* row 8 moved to row 7 */
+    CHECK(s.cells[8][0].ch == BLANK_CH);         /* freed row blanked */
+    CHECK(s.cells[1][0].ch == (u8)('A' + 1u));   /* above the region untouched */
+    CHECK(s.cells[9][0].ch == (u8)('A' + 9u));   /* below the region untouched */
+
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_cup(&s, r, 0);
+        screen_putc(&s, (u8)('A' + (r % 26u)));
+    }
+    screen_set_scroll_region(&s, 2, 8);
+    screen_scroll(&s, -1);
+
+    CHECK(s.cells[3][0].ch == (u8)('A' + 2u));   /* row 2 moved down to row 3 */
+    CHECK(s.cells[8][0].ch == (u8)('A' + 7u));   /* row 7 moved down to row 8 */
+    CHECK(s.cells[2][0].ch == BLANK_CH);         /* freed row blanked */
+
+    /* A scroll larger than the region must clear it, not read out of bounds. */
+    screen_init(&s);
+    screen_set_scroll_region(&s, 2, 8);
+    screen_scroll(&s, 100);
+    CHECK(s.cells[2][0].ch == BLANK_CH);
+    CHECK(s.cells[8][0].ch == BLANK_CH);
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -568,6 +623,7 @@ int main(void)
     test_set_scroll_region();
     test_dirty_groups();
     test_scroll_migrates_dirty_groups();
+    test_scroll_moves_content_exactly();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }

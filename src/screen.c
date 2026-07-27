@@ -2,6 +2,7 @@
  * screen.c -- terminal cell-grid model. See screen.h.
  */
 #include "screen.h"
+#include <string.h>
 
 void screen_mark_cell(screen_t *s, u8 row, u8 col)
 {
@@ -140,7 +141,7 @@ static s8 effective_scroll_n(int top, int bot, int n)
 
 static void scroll_region(screen_t *s, int top, int bot, int n)
 {
-    int absn, r, c;
+    int absn, r;
 
     n = effective_scroll_n(top, bot, n);
     if (n == 0) {
@@ -149,26 +150,26 @@ static void scroll_region(screen_t *s, int top, int bot, int n)
     absn = (n > 0) ? n : -n;
 
     if (n > 0) {                       /* scroll up: content moves toward top */
-        for (r = top; r <= bot - absn; ++r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r + absn][c];
-            }
-            for (c = 0; c < (int)DIRTY_BYTES; ++c) {
-                s->dirty[r][c] = s->dirty[r + absn][c];
-            }
+        u8 keep = (u8)(bot - absn - top + 1);
+
+        if (keep != 0) {
+            memmove(&s->cells[top][0], &s->cells[top + absn][0],
+                    (size_t)keep * COLS * sizeof(cell_t));
+            memmove(&s->dirty[top][0], &s->dirty[top + absn][0],
+                    (size_t)keep * DIRTY_BYTES);
         }
         for (r = bot - absn + 1; r <= bot; ++r) {
             blank_row(s, r);
             screen_mark_row(s, (u8)r);
         }
     } else {                           /* scroll down: content moves toward bot */
-        for (r = bot; r >= top + absn; --r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r - absn][c];
-            }
-            for (c = 0; c < (int)DIRTY_BYTES; ++c) {
-                s->dirty[r][c] = s->dirty[r - absn][c];
-            }
+        u8 keep = (u8)(bot - (top + absn) + 1);
+
+        if (keep != 0) {
+            memmove(&s->cells[top + absn][0], &s->cells[top][0],
+                    (size_t)keep * COLS * sizeof(cell_t));
+            memmove(&s->dirty[top + absn][0], &s->dirty[top][0],
+                    (size_t)keep * DIRTY_BYTES);
         }
         for (r = top; r <= top + absn - 1; ++r) {
             blank_row(s, r);
