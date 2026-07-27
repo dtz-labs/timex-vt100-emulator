@@ -45,8 +45,12 @@
  * frames, not literally sizeof(scr)+sizeof(vt), which measures (host cc,
  * -std=c99) at 3,878 + 51 = 3,929 bytes; the remaining ~194 bytes is real
  * call-stack overhead). Both are now file-scope statics in main.c, for the
- * same reason src/render.c:100 keeps row_glyphs/row_attrs/row_pixels off the
- * stack: it turns stack depth the linker cannot see into BSS that
+ * same reason blit_hires.c hoisted its per-row scratch state (see
+ * src/main.c's scr/vt comment for the current cross-reference -- that
+ * specific blit_hires.c example was replaced by Task 5's per-group dirty
+ * rendering, which no longer needs a whole-row scratch buffer, but the
+ * "stack depth the linker cannot see" principle is unchanged): it turns
+ * stack depth the linker cannot see into BSS that
  * tools/check_image_limit.py's
  * __BSS_END_tail reading can. This moved __BSS_END_tail from 0xCF1C to
  * 0xDE62 (0xDE62 - 0xCF1C = 3,910 bytes) and, per the remeasurement below,

@@ -247,11 +247,15 @@ static void sync_keyboard_modes(const screen_t *scr)
 }
 
 /*
- * File-scope, not locals of main(), for the same reason blit_hires.c keeps
- * row_glyphs/row_attrs/row_pixels off the stack: a Z80 stack frame holding
- * them would be enormous, and the linker cannot see stack usage at all, only
- * BSS. screen_t is 24*80 cell_t plus its scalars (COLS=80, ROWS=24) and
- * vtparse_t sits beside it; together they were the dominant part of a
+ * File-scope, not locals of main(), for the same reason blit_hires.c hoists
+ * its per-row scratch state to file scope: a Z80 stack frame holding them
+ * would be enormous, and the linker cannot see stack usage at all, only BSS.
+ * (Before Task 5, blit_hires.c held that state in file-scope
+ * row_glyphs/row_attrs/row_pixels arrays; Task 5's per-group dirty rendering
+ * replaced them with small per-group locals, so that specific example no
+ * longer exists in the source, but the underlying principle -- and this
+ * scr/vt hoist -- still does.) screen_t is 24*80 cell_t plus its scalars
+ * (COLS=80, ROWS=24) and vtparse_t sits beside it; together they were the dominant part of a
  * measured 4,123-byte main() stack frame (SP seed 0xFF58 down to a low-water
  * mark of 0xEF3D -- see include/im2.h and the fix-wave report) even though
  * main() never recurses and has no other large locals. Moving them here

@@ -260,12 +260,14 @@ static void test_pack4_no_gaps(void)
 }
 
 /*
- * render_row_bytes is the one piece of the 80-column blitter with real risk
- * (the fi = 1 + j*3 group-index arithmetic) and no other host coverage, since
- * render_row_fast itself writes absolute video-RAM addresses that only exist
- * on target. Build one full scanline -- all four bit phases, a blank cell,
- * and a fully-lit cell -- and check it against paint_reference exactly like
- * test_pack4_matches_reference does for a single group of four.
+ * render_row_bytes is a piece of the 80-column blitter's packing arithmetic
+ * (the fi = 1 + j*3 group-index arithmetic) with no other host coverage,
+ * since the hardware functions that write pixels (blit_row_groups,
+ * blit_row_clear, in src/blit_hires.c) write absolute video-RAM addresses
+ * that only exist on target. Build one full scanline -- all four bit
+ * phases, a blank cell, and a fully-lit cell -- and check it against
+ * paint_reference exactly like test_pack4_matches_reference does for a
+ * single group of four.
  */
 static void test_row_bytes_matches_reference(void)
 {
