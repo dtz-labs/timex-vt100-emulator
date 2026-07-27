@@ -58,32 +58,48 @@ command -v z88dk-ticks >/dev/null 2>&1 || { echo "z88dk-ticks not found on PATH.
 echo "compiler: $(zcc 2>&1 | head -1)"
 echo "see docs/perf/benchmarks.md for the recorded reference numbers"
 
-# -DTERM_TIMEX: screen.h requires exactly one of TERM_TIMEX/TERM_ZX since the
-# COLS=80/40 split (see include/screen.h); this harness only ever measures the
-# Timex 80-column geometry (render_hires.c/blit_hires.c below), so that's the
-# one it defines.
-PROJECT_SOURCES="$ROOT/src/screen.c $ROOT/src/render.c $ROOT/src/render_hires.c $ROOT/src/blit_hires.c $ROOT/src/hires.c $ROOT/src/font.c $BENCH_SRC/bench_common.c"
+# Task 11: measure BOTH geometries, mirroring test/run.sh's two-pass
+# convention. screen.h requires exactly one of TERM_TIMEX/TERM_ZX (the
+# COLS=80/40 split), so each geometry gets its own -D and its own
+# render_*.c/blit_*.c/{hires,ula}.c trio, in its own output subdirectory so
+# the two passes' object/binary names never collide.
+for geom in timex zx; do
+    case "$geom" in
+        timex)
+            TERM_DEF=-DTERM_TIMEX
+            GEOM_SOURCES="$ROOT/src/render_hires.c $ROOT/src/blit_hires.c $ROOT/src/hires.c"
+            ;;
+        zx)
+            TERM_DEF=-DTERM_ZX
+            GEOM_SOURCES="$ROOT/src/render_ula.c $ROOT/src/blit_ula.c $ROOT/src/ula.c"
+            ;;
+    esac
+    PROJECT_SOURCES="$ROOT/src/screen.c $ROOT/src/render.c $GEOM_SOURCES $ROOT/src/font.c $BENCH_SRC/bench_common.c"
+    GEOM_OUT="$OUT/$geom"
+    mkdir -p "$GEOM_OUT"
 
-for path in row_normal row_attrs row_blank scroll_model scroll_vram; do
-    printf '%-14s ' "$path"
+    echo "--- geometry: $TERM_DEF ---"
+    for path in row_normal row_attrs row_blank scroll_model scroll_vram; do
+        printf '%-14s ' "$path"
 
-    zcc +zx -SO3 -clib=sdcc_iy -iquote"$ROOT/include" -DTERM_TIMEX \
-        "$BENCH_SRC/bench_$path.c" $PROJECT_SOURCES \
-        -o "$OUT/bench_$path" -create-app -m >"$OUT/bench_$path.build.log" 2>&1 \
-        || { echo "BUILD FAILED (see $OUT/bench_$path.build.log)"; exit 1; }
+        zcc +zx -SO3 -clib=sdcc_iy -iquote"$ROOT/include" $TERM_DEF \
+            "$BENCH_SRC/bench_$path.c" $PROJECT_SOURCES \
+            -o "$GEOM_OUT/bench_$path" -create-app -m >"$GEOM_OUT/bench_$path.build.log" 2>&1 \
+            || { echo "BUILD FAILED (see $GEOM_OUT/bench_$path.build.log)"; exit 1; }
 
-    # NOTE: z88dk-ticks loads <input_file> using whatever `load_address` its
-    # arg-parser has seen SO FAR -- flags are applied left to right as parsed,
-    # and the file load happens the instant the (flag-less) filename argument
-    # is reached. -l MUST therefore appear BEFORE the filename, or the file
-    # loads at address 0 while PC starts at $8000 (a walk through unrelated/
-    # zero memory that still happens to cross the -start/-end addresses,
-    # producing a plausible-looking but meaningless number). Confirmed by
-    # tracing: filename-before-flags reproducibly returns the NOP-count
-    # between the two label addresses instead of the real T-state cost.
-    z88dk-ticks -l "$CODE_ORG" \
-        -x "$OUT/bench_$path.map" \
-        -start _bench_mark_a -end _bench_mark_b \
-        -counter "$TICKS_COUNTER" \
-        "$OUT/bench_${path}_CODE.bin" 2>/dev/null | tail -1
+        # NOTE: z88dk-ticks loads <input_file> using whatever `load_address` its
+        # arg-parser has seen SO FAR -- flags are applied left to right as parsed,
+        # and the file load happens the instant the (flag-less) filename argument
+        # is reached. -l MUST therefore appear BEFORE the filename, or the file
+        # loads at address 0 while PC starts at $8000 (a walk through unrelated/
+        # zero memory that still happens to cross the -start/-end addresses,
+        # producing a plausible-looking but meaningless number). Confirmed by
+        # tracing: filename-before-flags reproducibly returns the NOP-count
+        # between the two label addresses instead of the real T-state cost.
+        z88dk-ticks -l "$CODE_ORG" \
+            -x "$GEOM_OUT/bench_$path.map" \
+            -start _bench_mark_a -end _bench_mark_b \
+            -counter "$TICKS_COUNTER" \
+            "$GEOM_OUT/bench_${path}_CODE.bin" 2>/dev/null | tail -1
+    done
 done

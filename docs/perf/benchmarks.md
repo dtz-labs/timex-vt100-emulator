@@ -363,3 +363,87 @@ All four TAPs still build and pass `check-image-limit` with ample margin
 failure. No further size optimization was attempted: the functional
 correctness goal (box closes flush and no line wraps, at both 40 and 80
 columns) was the point of the task, and the margin is nowhere near the gate.
+
+## Task 11: the 40-column row, measured against the design's extrapolation
+
+`docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md` §7 commits
+to confirming its own extrapolation: "A 40-column row is roughly half the
+work of an 80-column row" (that specific sentence extrapolates from the
+review's PRE-Task-5 670,861 T baseline to "~335,000 T (~96 ms) per row ...
+if the ULA blitter simply mirrors the current hi-res one" -- which is
+exactly what D24/milestone 7 argue against doing, and Task 9 did not do).
+This task's brief instead asks for the halving check against the row this
+project actually shipped: the current, post-Task-5/9 80-column
+`row_normal` figure (267,267 T in the brief's own text; 268,283 T in this
+file's own "Current" table above, after Task 9's row_scanline_offset call --
+a 0.4% difference, immaterial here).
+
+`tools/bench.sh` was extended (Task 11) to measure BOTH geometries in one
+run, in its own committed harness (mirroring `test/run.sh`'s existing
+two-pass convention) instead of the ad hoc, uncommitted harness the
+"ULA blitter: duplicate vs. call (Task 9)" section above used:
+
+```sh
+export PATH="$HOME/Programowanie/z88dk/bin:$PATH"
+export ZCCCFG="$HOME/Programowanie/z88dk/lib/config"
+sh tools/bench.sh
+```
+
+| Path | Timex (80 col) | ZX (40 col) |
+|---|---:|---:|
+| row_normal | 268,283 | **130,748** |
+| row_attrs | 550,109 | 274,710 |
+| row_blank | 41,214 | 28,127 |
+| scroll_model | 101,533 | 53,808 |
+| scroll_vram | 680,099 | 327,243 |
+
+**The measured 40-column `row_normal` is 130,748 T.** Half of the 80-column
+figure is 134,141.5 T (using this file's own 268,283) or 133,633.5 T (using
+the brief's 267,267). The measurement is **2.5% below** the first and **2.2%
+below** the second -- well inside the brief's ~20% tolerance either way.
+
+**Conclusion: the halving extrapolation is confirmed, not wrong.** No
+"which direction it was wrong" correction is needed in the spec, because it
+was not wrong -- but the spec's own text describes a *different*,
+already-superseded extrapolation (670,861 / 2, from writing the ULA blitter
+as a naive copy of the pre-Task-5 hi-res path) and explicitly says that
+number "must be confirmed by the benchmark" once the real one exists. That
+part of the spec has been updated (see the design spec's own diff) to
+record the real, measured figure and note that it validates "roughly half"
+as a rule of thumb for this renderer shape, even though the specific
+historical number in that sentence was for a blitter this project never
+shipped.
+
+This also cross-checks the ad hoc, uncommitted measurement already recorded
+above under "ULA blitter: duplicate vs. call (Task 9)" (130,730 T for the
+shipped, duplicated-formula `blit_ula.c`): 130,748 T here vs. 130,730 T
+there is an 18 T difference (0.01%), consistent with the two harnesses
+measuring the same code through very slightly different call paths (this
+one calls the real `blit_flush()` entry point, as `bench_row_normal.c`'s own
+header comment explains, so it includes the 23 cheap "already clean" row
+checks a real call does; Task 9's ad hoc harness measured a narrower slice).
+Two independent measurements agreeing to 0.01% is strong confirmation this
+number is real, not noise -- `z88dk-ticks` has zero run-to-run variance
+regardless, but the cross-check also rules out a harness-construction bug.
+
+Verified inside the actual CI container image (not just the local z88dk
+build used everywhere else in this file), to confirm `make bench` behaves
+identically where `.github/workflows/ci.yml` actually runs it:
+
+```
+$ docker run --rm -v "$PWD":/src -w /src z88dk/z88dk:latest make bench
+compiler: zcc ... v1-fe33ce01-20260726
+--- geometry: -DTERM_TIMEX ---
+row_normal     268283   row_attrs  550109   row_blank  41214
+scroll_model   101533   scroll_vram 680099
+--- geometry: -DTERM_ZX ---
+row_normal     130748   row_attrs  274710   row_blank  28127
+scroll_model   53808    scroll_vram 327243
+```
+
+Despite a different z88dk build (`v1-fe33ce01-20260726` vs. the local
+`v23854-4d530b6eb7-20251002` used everywhere else in this file), every
+number is bit-for-bit identical -- code generation for this source is
+stable across these two builds, which is a useful (if incidental) data
+point for how much CI's use of `z88dk/z88dk:latest` can be expected to move
+these numbers between runs.

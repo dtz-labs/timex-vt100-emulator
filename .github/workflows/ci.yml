@@ -67,6 +67,20 @@ jobs:
       - name: Check IM2 image limit (outside the container)
         run: make check-image-limit
 
+      # Printed, not gated (D25): a T-state regression threshold would need
+      # a pinned compiler image, and this job intentionally floats on
+      # z88dk/z88dk:latest. `make bench` (tools/bench.sh) is deliberately
+      # NOT a prerequisite of the `ci` target above -- that target's own
+      # host-tests job has no z88dk at all -- so it runs here instead, in
+      # the one job that already has the toolchain this needs.
+      # continue-on-error keeps a bench build hiccup from failing the run;
+      # see docs/perf/benchmarks.md for the recorded reference numbers this
+      # step's output should be compared against by eye.
+      - name: Print renderer benchmarks (non-blocking)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD":/src -w /src z88dk/z88dk:latest make bench
+
       - name: Upload TAP artifacts
         uses: actions/upload-artifact@v4
         with:

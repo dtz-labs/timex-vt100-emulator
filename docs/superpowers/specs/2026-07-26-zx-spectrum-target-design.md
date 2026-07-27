@@ -253,6 +253,17 @@ blitter simply mirrors the current hi-res one. That is why D24 exists — this i
 not a copy-and-adjust job. The 40-column figures are extrapolations from the
 80-column measurements and must be confirmed by the benchmark in §9.
 
+**Confirmed (Task 11).** The blitter this project actually shipped is not a
+copy of the hi-res one (D24 held); `tools/bench.sh` measures the real
+`row_normal` cost at both widths in one run. Against the shipped 80-column
+figure (267,267–268,283 T across the tasks that touched it, not the
+670,861 T pre-Task-5 number this section's own extrapolation above used),
+the measured 40-column row is **130,748 T** — 2.2–2.5% below half, well
+inside tolerance. The "roughly half" rule of thumb holds for this renderer
+shape; see `docs/perf/benchmarks.md`, "Task 11: the 40-column row, measured
+against the design's extrapolation" for the full comparison and the CI
+container cross-check.
+
 **In scope**, because this slice rewrites these paths anyway:
 
 1. **Dirty tracking in groups of four cells** instead of one boolean per row.
@@ -532,7 +543,7 @@ the §7 extrapolation for 40 columns. The rest belongs with the contract fix tha
 | Clones or interfaces that decode port `$FF` incompletely make a genuine Timex fail the guard. | CAPS SHIFT bypass (D22), plus the machine name in the banner so the fault is visible. |
 | The 80-column image may already be close to the IM2 table; the known margin is from the 64-column build. | First implementation task measures it; the gate then makes any future overrun a build failure (§8). |
 | Two artifacts, and users may pick the wrong one. | The Spectrum TAP runs on ZX Spectrums **and the TC2048**, so it is the safe default between those two — verified by the fourth smoke combination in §10. It is not a universal fallback: a TS2068 loads neither TAP (row 1). The Timex TAP refuses rather than showing garbage. |
-| The 40-column T-state figures are extrapolated, not measured. | The benchmark in §10 confirms them before the performance work is called done. |
+| The 40-column T-state figures are extrapolated, not measured. | **Resolved (Task 11):** measured at 130,748 T for `row_normal`, 2.2–2.5% below half the shipped 80-column figure — see §7's "Confirmed (Task 11)" note and `docs/perf/benchmarks.md`. |
 | **The scroll/dirty contract is split across two slices** (§7). This slice implements four of the five steps of the review's robust model and defers the fifth. The deferred piece — `main.c` predicting scrolls from raw bytes — is a P0 the review places *before* the packer work. | Item 7 in §7 is mandatory precisely because removing the `main.c` cursor-row dirtying without it would drop characters on deferred wrap. The residual defect is unchanged from today's behaviour, not worsened. If the deferred piece proves entangled during implementation, pull it in rather than working around it. |
 
 ---

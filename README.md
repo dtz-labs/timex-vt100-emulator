@@ -383,10 +383,18 @@ make ci
 ZEsarUX smoke test:
 
 ```sh
-ZRCP_PORT=10140 SMOKE_WAIT=12 make smoke
+ZRCP_PORT=10140 make smoke      # term.tap: startup screen, the SCLD guard firing
+                                 # on a plain Spectrum, CAPS SHIFT bypassing it, and
+                                 # a real-scroll content check
+ZRCP_PORT=10140 make smoke-zx   # term-zx.tap: startup screen on its native 48k,
+                                 # and on a TC2048 (the safe-default claim)
 ```
 
 Use a fresh `ZRCP_PORT` if a previous ZEsarUX session may still be running.
+Each of the five scenarios these two targets run has its own default wait
+time; override with `SMOKE_WAIT=<seconds>` if a given machine needs longer to
+settle. See `test/zesarux_smoke.py`'s module docstring for the full list of
+combinations and the ZRCP-based verification method.
 
 ## Terminal Compatibility
 

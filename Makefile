@@ -193,7 +193,7 @@ ZRCP_CMD ?=
 
 .DELETE_ON_ERROR:
 
-.PHONY: all tap if1 tap-zx if1-zx release-build test host-test ci python-check terminfo-check smoke install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
+.PHONY: all tap if1 tap-zx if1-zx release-build test host-test ci python-check terminfo-check smoke smoke-zx bench install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
 	run-tc2048 run-tc2068 run-ts2068 clean \
 	check-z88dk check-zesarux check-timex-machine check-image-limit print-vars FORCE
 
@@ -227,14 +227,46 @@ host-test:
 
 ci: host-test python-check terminfo-check
 
+# NOT a prerequisite of `ci`: `ci` is designed to run with only a host C
+# compiler and Python (see host-tests in .github/workflows/ci.yml, which is
+# plain ubuntu-latest -- no z88dk). z88dk is only present in the separate
+# build-tap job's z88dk/z88dk:latest container, which is where
+# .github/workflows/ci.yml runs this target, as its own non-blocking,
+# printed-not-gated step (D25) -- see tools/bench.sh's own header for why a
+# regression threshold isn't safe against an unpinned `:latest` image.
+bench:
+	sh tools/bench.sh
+
 python-check:
 	python3 -m py_compile tools/*.py test/zesarux_smoke.py test/test_check_image_limit.py
 
 terminfo-check: $(TERMINFO_SRCS)
 	@for f in $(TERMINFO_SRCS); do tic -c -x "$$f" || exit 1; done
 
+# Covers three of the five TAP/machine combinations from
+# docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md (10) --
+# term.tap on its native machine, the guard firing on a plain Spectrum, and
+# CAPS SHIFT bypassing it -- plus a real-scroll content check (see
+# test/zesarux_smoke.py's module docstring). `smoke-zx` below covers the
+# other two, both of which use term-zx.tap.
 smoke: $(TAP) check-zesarux
-	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py
+	@echo "=== smoke: term.tap on $(TIMEX_MACHINE) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(TAP)" --machine $(TIMEX_MACHINE) --geom hires --scenario normal
+	@echo "=== smoke: term.tap on 48k (guard must fire) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(TAP)" --machine 48k --geom hires --scenario guard
+	@echo "=== smoke: term.tap on 48k, CAPS SHIFT held (guard bypassed) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(TAP)" --machine 48k --geom hires --scenario bypass
+	@echo "=== smoke: term.tap real-scroll content check on $(TIMEX_MACHINE) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(TAP)" --machine $(TIMEX_MACHINE) --geom hires --scenario scroll
+
+# The other two combinations: term-zx.tap on its native machine, and --
+# the row the whole "ZX TAP is the safe default" argument rests on --
+# term-zx.tap on a Timex.
+smoke-zx: $(ZX_TAP) check-zesarux
+	@echo "=== smoke-zx: term-zx.tap on 48k ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine 48k --geom ula --scenario normal
+	@echo "=== smoke-zx: term-zx.tap on $(TIMEX_MACHINE) (the safe-default claim) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine $(TIMEX_MACHINE) --geom ula --scenario normal
 
 # Runs the IM2 image-limit gate standalone against already-built .map files.
 # Used by CI as its own step outside the z88dk container (see
