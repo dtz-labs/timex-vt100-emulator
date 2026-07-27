@@ -18,6 +18,24 @@
 #define HIRES_FILE0 0x4000u   /* even character columns */
 #define HIRES_FILE1 0x6000u   /* odd character columns  */
 
+/*
+ * HIRES_THIRDS_OFFSET(prow) -- the ZX "thirds" scanline-interleave formula
+ * itself, as a macro, single-sourced here so src/hires.c's hires_addr() and
+ * hires_row_scanline_offset() AND src/blit_hires.c's scroll path (which used
+ * to keep its own hand-copy, scroll_scanline_offset(), because a real
+ * function call there measured +95,504 T / +14% on scroll_vram -- see
+ * docs/perf/benchmarks.md, "Task 9: moving row_scanline_offset out of
+ * blit_hires.c") can all use the identical expression without a CALL. `prow`
+ * is a physical pixel row 0..191 (`(row << 3) + scanline`). See
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas"
+ * for the re-measurement that justified collapsing the scroll-path copy into
+ * this macro too.
+ */
+#define HIRES_THIRDS_OFFSET(prow) \
+    ( (u16)( ((u16)((u8)(prow) & 0xC0u) << 5) \
+           | ((u16)((u8)(prow) & 0x07u) << 8) \
+           | ((u16)((u8)(prow) & 0x38u) << 2) ) )
+
 /* Address of pixel scanline `prow` (0..191) of scanline BYTE COLUMN `col`
  * (0..63) in the hi-res display files. This is a byte column, not a text
  * character cell: at the 6-px cell pitch used by the terminal, a cell can

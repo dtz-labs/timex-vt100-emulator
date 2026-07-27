@@ -50,9 +50,12 @@ static void blit_row_clear(u8 row)
  *
  * The 8 scanline offsets (and the ev/od base pointers they produce) do not
  * depend on the group, only on `row` -- computed ONCE per row, before the
- * group loop, not once per group. Recomputing them per group was measured to
- * add ~120,000 T to a 20-group row (8x the calls: 160 instead of 8), which
- * would have silently defeated most of this task's point.
+ * group loop, not once per group. Recomputing them (and font_glyph()) per
+ * group instead of once per row was measured to add 42,106 T to a 20-group
+ * row (318,554 T -> 276,448 T after hoisting both out of the loop; see
+ * docs/perf/benchmarks.md, "The row_normal gap: investigated, not silently
+ * accepted", item 1) -- 8x the calls (160 instead of 8) for the offset
+ * table, which would have silently defeated much of this task's point.
  *
  * Per group, the four cells' attributes are read once, up front, and their
  * glyph pointers looked up once (not once per scanline -- the same 8x trap
@@ -79,34 +82,24 @@ static void blit_row_groups(const screen_t *s, u8 row)
     }
 
     for (g = 0; g < DIRTY_GROUPS; ++g) {
-        u8 col0, fi;
+        u8 col0;
         const cell_t *c0, *c1, *c2, *c3;
-        u8 idx0, idx1, idx2, ev_first;
+        u8 idx0, idx1, idx2, file0, file1, file2, ev_first;
 
         /*
-         * DUPLICATED FORMULAS -- KNOWN, MEASURED, DELIBERATE. Read this
-         * before changing screen_group_dirty() (src/screen.c) or
-         * render_group_bytes() (src/render_hires.c): this block re-implements
-         * both by hand and WILL NOT be caught by test/run.sh if you change
-         * the originals and forget this copy, because blit_hires.c uses
-         * absolute HIRES_FILE0/1 addresses and so cannot be host-compiled at
-         * all -- see the constraint note on both original definitions.
-         *
-         * Why duplicated instead of called: calling render_group_bytes()
-         * and screen_group_dirty() at GROUP granularity (once per group, 20
-         * calls/row each, not once per scanline -- that would be the 8x trap
-         * this file's header comment warns about) was tried and measured:
-         * 267,267 T -> 286,382 T for a full 20-group fast-path row, +19,115 T
-         * (~7%). That is a deterministic, reproducible cost (this emulator
-         * has no run-to-run variance), not measurement noise, so it was
-         * judged material against a row that already misses its 194,617 T
-         * reference target -- see docs/perf/benchmarks.md, "Function-call
-         * vs. inlined mapping/dirty-check" for the exact before/after and the
-         * commands that produced them. Task 9's blit_ula.c brief must know
-         * this shape is duplicated, not assume it can just call the shared
-         * functions and match this file's speed.
+         * Single-sourced macros, not hand-copied formulas: SCREEN_GROUP_DIRTY_BIT()
+         * (screen.h) and RENDER_GROUP_BYTES_INLINE() (render_geom.h) express
+         * the exact same dirty-bit test and index arithmetic screen_group_dirty()
+         * and render_group_bytes() (src/render_hires.c) use, but as macros so no
+         * CALL is emitted at this hot per-group call site. This replaces a
+         * previous hand-duplicated copy of both formulas -- see
+         * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated
+         * formulas" for the re-measurement that justified collapsing the
+         * duplication into these macros instead of keeping three copies of
+         * each formula (this file, render_hires.c/screen.c, and the reader's
+         * memory of both staying in sync).
          */
-        if (!(s->dirty[row][g >> 3] & (u8)(1u << (g & 7u)))) {
+        if (!SCREEN_GROUP_DIRTY_BIT(s, row, g)) {
             continue;
         }
 
@@ -116,14 +109,15 @@ static void blit_row_groups(const screen_t *s, u8 row)
         c2 = c0 + 2;
         c3 = c0 + 3;
 
-        fi = (u8)(1u + 3u * (g >> 1));
-        if ((g & 1u) == 0u) {
-            idx0 = fi; idx1 = fi; idx2 = (u8)(fi + 1u);
-            ev_first = 1u;
-        } else {
-            idx0 = (u8)(fi + 1u); idx1 = (u8)(fi + 2u); idx2 = (u8)(fi + 2u);
-            ev_first = 0u;
-        }
+        RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2);
+        /* file0 always equals file2 and file1 is its complement for this
+         * geometry's group-to-byte mapping (see RENDER_GROUP_BYTES_INLINE's
+         * TERM_TIMEX branch) -- ev_first captures that in one flag, exactly
+         * as the formula it replaces did, so the scanline loop below still
+         * branches once per group rather than once per scanline byte. */
+        ev_first = (u8)(file0 == 0u);
+        (void)file1;
+        (void)file2;
 
         if ((u8)(c0->attr | c1->attr | c2->attr | c3->attr) == 0u) {
             const u8 *fg0 = font_glyph(c0->ch);
@@ -200,48 +194,38 @@ void blit_flush(screen_t *s)
 }
 
 /*
- * DUPLICATED FORMULA -- KNOWN, MEASURED, DELIBERATE. Same formula as
- * hires_row_scanline_offset() (src/hires.c), copied here rather than called.
+ * The scroll path used to keep its own hand-copy of the "thirds" formula
+ * (scroll_scanline_offset(), a local static function) because a real
+ * cross-TU call to hires_row_scanline_offset() here -- up to 2x per (row,
+ * scanline) pair, x2 files, over a 23-row region, ~750 calls for one
+ * blit_scroll_region() -- measured +95,504 T (680,099 -> 775,603 T, ~14%) on
+ * scroll_vram (see docs/perf/benchmarks.md, "Task 9: moving
+ * row_scanline_offset out of blit_hires.c"). blit_row_groups()/
+ * blit_row_clear() above call hires_row_scanline_offset() at most 8 times
+ * per row, which measured as a negligible ~1,000 T/row instead -- a real
+ * function call is only expensive at this loop's higher call count.
  *
- * blit_row_groups()/blit_row_clear() above DO call hires_row_scanline_offset()
- * (Task 9 moved the original blit_hires.c-local static function there so
- * src/ula.c could share the identical "thirds" formula): those two call it at
- * most 8 times per row, and that measured as a negligible ~1,000 T/row
- * (row_normal 267,267 -> 268,283 T; see docs/perf/benchmarks.md). The scroll
- * primitives below are a different story: scroll_file_up_one/down_one call
- * it up to 2x per (row, scanline) pair, x2 files, over a 23-row region --
- * roughly 750 calls for one blit_scroll_region() -- and switching those calls
- * to the real cross-TU function measured as +95,504 T (680,099 -> 775,603 T,
- * ~14%) on `scroll_vram`, a path Tasks 3/4 already optimised and this task
- * has no business regressing. Reverted to a local duplicate for exactly this
- * loop; see docs/perf/benchmarks.md, "Scanline-offset call vs. duplicate in
- * the scroll path (Task 9)" for the numbers. Keep this in sync with
- * hires_row_scanline_offset() (src/hires.c) and hires_addr()'s own offset
- * math if the "thirds" formula ever changes -- test/run.sh cannot catch a
- * divergence here, since this file cannot be host-compiled.
+ * HIRES_THIRDS_OFFSET() (hires.h) is a macro, not a function, so using it
+ * directly here -- rather than keeping a second hand-copy of the same
+ * bit arithmetic -- was re-measured rather than assumed safe: see
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas".
+ * This is the SAME expression hires_row_scanline_offset() (src/hires.c) and
+ * hires_addr() use, single-sourced in hires.h, so there is no longer a
+ * second copy to keep in sync.
  */
-static u16 scroll_scanline_offset(u8 row, u8 scanline)
-{
-    u8 prow = (u8)((row << 3) + scanline);
-
-    return (u16)(((u16)(prow & 0xC0u) << 5)
-               | ((u16)(prow & 0x07u) << 8)
-               | ((u16)(prow & 0x38u) << 2));
-}
-
 static void scroll_file_up_one(u16 base, u8 top, u8 bot)
 {
     u8 row, scanline;
 
     for (row = top; row < bot; ++row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(base + scroll_scanline_offset((u8)(row + 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)((row << 3) + scanline)));
+            const u8 *src = (const u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)(((row + 1u) << 3) + scanline)));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(bot, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)((bot << 3) + scanline)));
         memset(dst, 0, 32u);
     }
 }
@@ -252,13 +236,13 @@ static void scroll_file_down_one(u16 base, u8 top, u8 bot)
 
     for (row = bot; row > top; --row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(base + scroll_scanline_offset((u8)(row - 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)((row << 3) + scanline)));
+            const u8 *src = (const u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)(((row - 1u) << 3) + scanline)));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + scroll_scanline_offset(top, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(base + HIRES_THIRDS_OFFSET((u8)((top << 3) + scanline)));
         memset(dst, 0, 32u);
     }
 }

@@ -36,20 +36,14 @@ void screen_clear_marks(screen_t *s, u8 row)
 }
 
 /*
- * CONSTRAINT for anyone changing this bit test: src/blit_hires.c's
- * blit_row_groups() AND src/blit_ula.c's blit_row_groups() both hand-copy
- * this exact expression inline, for measured hot-path performance (see
- * docs/perf/benchmarks.md, "Function-call vs. inlined mapping/dirty-check"
- * for the Timex measurement and "ULA blitter: duplicate vs. call (Task 9)"
- * for the ULA one). Neither blit_hires.c nor blit_ula.c can be host-compiled
- * (absolute HIRES_FILE0/1/ULA_FILE addresses), so test/run.sh will NOT catch
- * a divergence between either copy and this function if you change this
- * without updating both. Grep for "DUPLICATED FORMULAS" in blit_hires.c and
- * blit_ula.c before touching this.
+ * Both blitters call SCREEN_GROUP_DIRTY_BIT() (screen.h) directly instead of
+ * hand-copying this test -- see that macro's comment for why a macro rather
+ * than a plain call to this function. This function is a thin wrapper over
+ * the same macro, so there is exactly one definition of the bit test.
  */
 u8 screen_group_dirty(const screen_t *s, u8 row, u8 group)
 {
-    return (u8)(s->dirty[row][group >> 3] & (u8)(1u << (group & 7u)));
+    return SCREEN_GROUP_DIRTY_BIT(s, row, group);
 }
 
 u8 screen_row_dirty(const screen_t *s, u8 row)

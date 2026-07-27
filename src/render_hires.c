@@ -78,13 +78,15 @@ void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
  * memory and is host-testable.
  *
  * CONSTRAINT for anyone changing this formula: src/blit_hires.c's
- * blit_row_groups() hand-copies this exact `fi`/even-odd arithmetic inline,
- * for measured hot-path performance (see docs/perf/benchmarks.md,
- * "Function-call vs. inlined mapping/dirty-check"). blit_hires.c cannot be
+ * blit_row_groups() does not call this function (a real cross-TU call here
+ * was measured too expensive for this hot per-group call site -- see
+ * docs/perf/benchmarks.md, "Function-call vs. inlined mapping/dirty-check").
+ * It instead uses RENDER_GROUP_BYTES_INLINE() (render_geom.h), a macro
+ * expressing this SAME `fi`/even-odd arithmetic, single-sourced next to this
+ * function's declaration in render_geom.h. blit_hires.c cannot be
  * host-compiled (absolute HIRES_FILE0/1 addresses), so test/run.sh will NOT
- * catch a divergence between that copy and this function if you change
- * this without updating both. Grep for "DUPLICATED FORMULAS" in
- * blit_hires.c before touching this.
+ * catch a divergence between that macro and this function if you change one
+ * without the other -- keep them in sync.
  */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3)
 {

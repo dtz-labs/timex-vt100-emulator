@@ -91,10 +91,27 @@ void screen_mark_row(screen_t *s, u8 row);
 /* Clear all dirty marks for row. */
 void screen_clear_marks(screen_t *s, u8 row);
 
-/* Non-zero if the given four-cell group of row is marked dirty. Changing
- * this bit test? See the CONSTRAINT comment at its definition (src/screen.c)
- * -- it has an untested hand-copy in both src/blit_hires.c and
- * src/blit_ula.c. */
+/*
+ * SCREEN_GROUP_DIRTY_BIT -- the dirty-bit test itself, as a macro rather than
+ * a function, so both screen_group_dirty() below AND src/blit_hires.c's /
+ * src/blit_ula.c's blit_row_groups() can share ONE expression instead of
+ * screen_group_dirty()'s body being hand-copied inline in both blitters (see
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas"
+ * for the measurement that justifies calling this a safe collapse -- a plain
+ * function call here was measured materially slower, which is why this is a
+ * macro rather than an ordinary exported function). Expressed as a macro
+ * (not `static inline`) because that is the one construct guaranteed not to
+ * emit a CALL under every C compiler, including SDCC/zsdcc's more limited
+ * inlining; a `static inline` function was not assumed to behave the same
+ * without measuring it, and generally doesn't under this ABI.
+ */
+#define SCREEN_GROUP_DIRTY_BIT(s, row, group) \
+    ((u8)((s)->dirty[(row)][(u8)((group) >> 3)] \
+          & (u8)(1u << ((u8)(group) & 7u))))
+
+/* Non-zero if the given four-cell group of row is marked dirty. Both blitters
+ * now call SCREEN_GROUP_DIRTY_BIT() above directly instead of hand-copying
+ * this bit test -- see that macro's comment. */
 u8 screen_group_dirty(const screen_t *s, u8 row, u8 group);
 
 /* Non-zero if any four-cell group of row is marked dirty. */

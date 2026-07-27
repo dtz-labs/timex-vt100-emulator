@@ -13,6 +13,23 @@
 
 #include "types.h"
 
+/*
+ * ULA_THIRDS_OFFSET(prow) -- identical formula to hires.h's
+ * HIRES_THIRDS_OFFSET(), as a macro for the same reason: src/ula.c's
+ * ula_addr()/ula_row_scanline_offset() AND src/blit_ula.c's scroll path share
+ * this one expression. The scroll path used to keep its own hand-copy
+ * (scroll_scanline_offset()) because a real cross-TU call there measured a
+ * double-digit percentage cost on scroll_vram (see docs/perf/benchmarks.md,
+ * "Task 9: moving row_scanline_offset out of blit_hires.c"); using this macro
+ * directly there instead was re-measured, not assumed, and found to remove
+ * that cost entirely rather than merely avoid regressing it -- see
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas".
+ */
+#define ULA_THIRDS_OFFSET(prow) \
+    ( (u16)( ((u16)((u8)(prow) & 0xC0u) << 5) \
+           | ((u16)((u8)(prow) & 0x07u) << 8) \
+           | ((u16)((u8)(prow) & 0x38u) << 2) ) )
+
 /* Address of pixel scanline `prow` (0..191) of scanline BYTE COLUMN `col`
  * (0..31) in the ULA display file. This is a byte column, not a text
  * character cell: at the 6-px cell pitch used by the terminal, a cell can

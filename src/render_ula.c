@@ -37,15 +37,18 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1)
  * host tests exercise (test_group_byte_mapping, test/test_render.c).
  *
  * CONSTRAINT for anyone changing this formula: src/blit_ula.c's
- * blit_row_groups() hand-copies this exact `idx0 = 1 + 3*g` arithmetic
- * inline. Task 9 measured calling this function (and screen_group_dirty())
- * at group granularity against duplicating it: 130,730 T vs. 143,181 T for a
- * full 10-group fast-path row, +12,451 T (~9.5%) -- see
- * docs/perf/benchmarks.md, "ULA blitter: duplicate vs. call (Task 9)".
+ * blit_row_groups() does not call this function -- Task 9 measured calling
+ * this function (and screen_group_dirty()) at group granularity against
+ * duplicating it: 130,730 T vs. 143,181 T for a full 10-group fast-path row,
+ * +12,451 T (~9.5%) (see docs/perf/benchmarks.md, "ULA blitter: duplicate vs.
+ * call (Task 9)"). It instead uses RENDER_GROUP_BYTES_INLINE() (render_geom.h),
+ * a macro expressing this SAME `idx0 = 1 + 3*g` arithmetic, single-sourced
+ * next to this function's declaration in render_geom.h, re-measured against
+ * the hand-duplicated version and found within noise or better (see
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas").
  * blit_ula.c cannot be host-compiled (absolute ULA_FILE address), so
- * test/run.sh will NOT catch a divergence between that copy and this
- * function if you change this without updating both. Grep for "DUPLICATED
- * FORMULAS" in blit_ula.c before touching this.
+ * test/run.sh will NOT catch a divergence between that macro and this
+ * function if you change one without the other -- keep them in sync.
  */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3)
 {

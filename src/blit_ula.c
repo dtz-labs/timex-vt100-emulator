@@ -59,7 +59,9 @@ static void blit_row_clear(u8 row)
  *
  * The 8 scanline offsets are computed ONCE per row, before the group loop,
  * not once per group -- see blit_hires.c's header comment for the measured
- * cost (~120,000 T for a full row) of getting this wrong.
+ * cost (42,106 T for a full 20-group row; see docs/perf/benchmarks.md, "The
+ * row_normal gap: investigated, not silently accepted") of getting this
+ * wrong.
  *
  * Per group, the four cells' attributes are read once, up front, and their
  * glyph pointers looked up once (not once per scanline):
@@ -78,34 +80,23 @@ static void blit_row_groups(const screen_t *s, u8 row)
     }
 
     for (g = 0; g < DIRTY_GROUPS; ++g) {
-        u8 col0, idx0;
+        u8 col0, idx0, idx1, idx2, file0, file1, file2;
         const cell_t *c0, *c1, *c2, *c3;
 
         /*
-         * DUPLICATED FORMULAS -- KNOWN, MEASURED, DELIBERATE. Read this
-         * before changing screen_group_dirty() (src/screen.c) or
-         * render_group_bytes() (src/render_ula.c): this block re-implements
-         * both by hand and WILL NOT be caught by test/run.sh if you change
-         * the originals and forget this copy, because blit_ula.c uses an
-         * absolute ULA_FILE address and so cannot be host-compiled at all --
-         * see the CONSTRAINT note on both original definitions.
-         *
-         * Why duplicated instead of called: this is a fresh decision for the
-         * ULA geometry, not an assumption carried over from blit_hires.c --
-         * the ULA mapping is materially simpler (one file, no even/odd
-         * branch), so it was measured rather than assumed. Calling
-         * screen_group_dirty() + render_group_bytes() at GROUP granularity
-         * (once per group, 10 calls/row each for the 40-column build, not
-         * once per scanline) was tried and measured with an ad hoc
-         * z88dk-ticks harness mirroring tools/bench/bench_row_normal.c (one
-         * dirty row, 40 cells, attr == 0): 130,730 T duplicated vs. 143,181 T
-         * calling, +12,451 T (~9.5%). Same deterministic-cost conclusion as
-         * blit_hires.c's equivalent measurement (that one +19,115 T, ~7.2%,
-         * over 20 groups instead of 10) -- see docs/perf/benchmarks.md,
-         * "ULA blitter: duplicate vs. call (Task 9)" for the exact numbers
-         * and the commands that produced them.
+         * Single-sourced macros, not hand-copied formulas: SCREEN_GROUP_DIRTY_BIT()
+         * (screen.h) and RENDER_GROUP_BYTES_INLINE() (render_geom.h) express
+         * the exact same dirty-bit test and index arithmetic screen_group_dirty()
+         * and render_group_bytes() (src/render_ula.c) use, but as macros so no
+         * CALL is emitted at this hot per-group call site. This replaces a
+         * previous hand-duplicated copy of both formulas -- see
+         * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated
+         * formulas" for the re-measurement that justified collapsing the
+         * duplication into these macros (this is a fresh decision for the
+         * ULA geometry, re-measured on its own terms, not an assumption
+         * carried over from blit_hires.c's identical decision).
          */
-        if (!(s->dirty[row][g >> 3] & (u8)(1u << (g & 7u)))) {
+        if (!SCREEN_GROUP_DIRTY_BIT(s, row, g)) {
             continue;
         }
 
@@ -115,9 +106,16 @@ static void blit_row_groups(const screen_t *s, u8 row)
         c2 = c0 + 2;
         c3 = c0 + 3;
 
-        /* Three CONSECUTIVE scanline bytes -- mirrors render_group_bytes()
-         * (src/render_ula.c) exactly: idx3[k] = 1 + 3*g + k, file3[k] = 0. */
-        idx0 = (u8)(1u + 3u * g);
+        /* Three CONSECUTIVE scanline bytes, all in the single display file --
+         * RENDER_GROUP_BYTES_INLINE's TERM_ZX branch always sets file0/1/2 to
+         * 0, so only idx0 is used below (idx1/idx2 happen to equal
+         * idx0+1/idx0+2, mirroring render_group_bytes()'s ULA formula). */
+        RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2);
+        (void)idx1;
+        (void)idx2;
+        (void)file0;
+        (void)file1;
+        (void)file2;
 
         if ((u8)(c0->attr | c1->attr | c2->attr | c3->attr) == 0u) {
             const u8 *fg0 = font_glyph(c0->ch);
@@ -182,43 +180,39 @@ void blit_flush(screen_t *s)
 }
 
 /*
- * DUPLICATED FORMULA -- KNOWN, MEASURED, DELIBERATE, mirroring blit_hires.c's
- * scroll_scanline_offset(). blit_row_groups()/blit_row_clear() above call
- * ula_row_scanline_offset() (src/ula.c) at most 8 times per row -- measured
- * negligible. The scroll primitives below call it up to 2x per (row,
- * scanline) pair over a 23-row region, ~370 calls for one
- * blit_scroll_region() (half of blit_hires.c's ~750, since there is only one
- * display file here) -- the same class of hot loop that measured +95,504 T
- * (~14%) on the Timex build when switched from a local duplicate to a real
- * call (see docs/perf/benchmarks.md, "Scanline-offset call vs. duplicate in
- * the scroll path (Task 9)"). Duplicated here for the same reason, rather
- * than assuming the ULA's simpler geometry makes the call free. Keep this in
- * sync with ula_row_scanline_offset() (src/ula.c) if the "thirds" formula
- * ever changes -- test/run.sh cannot catch a divergence here, since this
- * file cannot be host-compiled.
+ * The scroll path used to keep its own hand-copy of the "thirds" formula
+ * (scroll_scanline_offset(), a local static function, mirroring
+ * blit_hires.c's identical one) because a real cross-TU call to
+ * ula_row_scanline_offset() here -- up to 2x per (row, scanline) pair over a
+ * 23-row region, ~370 calls for one blit_scroll_region() (half of
+ * blit_hires.c's ~750, since there is only one display file here) -- is the
+ * same class of hot loop that measured +95,504 T (~14%) on the Timex build
+ * when switched from a local duplicate to a real call (see
+ * docs/perf/benchmarks.md, "Task 9: moving row_scanline_offset out of
+ * blit_hires.c"). blit_row_groups()/blit_row_clear() above call
+ * ula_row_scanline_offset() at most 8 times per row -- measured negligible.
+ *
+ * ULA_THIRDS_OFFSET() (ula.h) is a macro, not a function, so using it
+ * directly here -- rather than keeping a second hand-copy of the same bit
+ * arithmetic -- was re-measured rather than assumed safe: see
+ * docs/perf/benchmarks.md, "I5: macro/inline vs. hand-duplicated formulas".
+ * This is the SAME expression ula_row_scanline_offset() (src/ula.c) and
+ * ula_addr() use, single-sourced in ula.h, so there is no longer a second
+ * copy to keep in sync.
  */
-static u16 scroll_scanline_offset(u8 row, u8 scanline)
-{
-    u8 prow = (u8)((row << 3) + scanline);
-
-    return (u16)(((u16)(prow & 0xC0u) << 5)
-               | ((u16)(prow & 0x07u) << 8)
-               | ((u16)(prow & 0x38u) << 2));
-}
-
 static void scroll_up_one(u8 top, u8 bot)
 {
     u8 row, scanline;
 
     for (row = top; row < bot; ++row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset((u8)(row + 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((row << 3) + scanline)));
+            const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row + 1u) << 3) + scanline)));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset(bot, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((bot << 3) + scanline)));
         memset(dst, 0, 32u);
     }
 }
@@ -229,13 +223,13 @@ static void scroll_down_one(u8 top, u8 bot)
 
     for (row = bot; row > top; --row) {
         for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset(row, scanline));
-            const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset((u8)(row - 1u), scanline));
+            u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((row << 3) + scanline)));
+            const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row - 1u) << 3) + scanline)));
             memcpy(dst, src, 32u);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + scroll_scanline_offset(top, scanline));
+        u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((top << 3) + scanline)));
         memset(dst, 0, 32u);
     }
 }

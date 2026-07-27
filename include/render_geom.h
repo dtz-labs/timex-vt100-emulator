@@ -32,21 +32,61 @@ void render_row_bytes(const u8 *g, u8 *ev, u8 *od);
  * file3: which row buffer each index belongs to -- 0 for `ev` (or the ULA's
  *        single file), 1 for `od`. The ULA build (one file) sets file3 all 0.
  *
- * The future ULA blitter (render_ula.c) exports the same name so blit_ula.c
+ * render_hires.c/render_ula.c export the same name so blit_hires.c/blit_ula.c
  * can be written in this exact shape.
  *
  * CONSTRAINT: neither implementation's blitter calls this function through
- * this declaration. src/blit_hires.c's blit_row_groups() hand-copies the
- * `fi`/even-odd arithmetic inline; src/blit_ula.c's blit_row_groups() (Task
- * 9, measured fresh rather than assumed) hand-copies the simpler
- * `idx0 = 1 + 3*g` arithmetic inline. Both are measured hot-path decisions --
- * see docs/perf/benchmarks.md ("Function-call vs. inlined mapping/dirty-check"
- * for hi-res, "ULA blitter: duplicate vs. call (Task 9)" for the ULA build).
- * Neither blit_hires.c nor blit_ula.c can be host-compiled (absolute
- * HIRES_FILE0/1 / ULA_FILE addresses), so test/run.sh will NOT catch a
- * divergence if you change either geometry's formula without updating its
- * matching blit_*.c copy. Grep for "DUPLICATED FORMULAS" in blit_hires.c and
- * blit_ula.c. */
+ * this declaration -- both measured a real cross-TU call here too expensive
+ * for this hot per-group call site (see docs/perf/benchmarks.md,
+ * "Function-call vs. inlined mapping/dirty-check" for hi-res, "ULA blitter:
+ * duplicate vs. call (Task 9)" for the ULA build). Both instead use
+ * RENDER_GROUP_BYTES_INLINE() below, a macro expressing this SAME formula per
+ * geometry, single-sourced here rather than each blitter hand-copying its own
+ * copy (re-measured after collapsing the hand-copies into this macro -- see
+ * "I5: macro/inline vs. hand-duplicated formulas"). Neither blit_hires.c nor
+ * blit_ula.c can be host-compiled (absolute HIRES_FILE0/1 / ULA_FILE
+ * addresses), so test/run.sh will NOT catch a divergence if you change this
+ * function without updating the matching branch of the macro below. */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3);
+
+/*
+ * RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2) --
+ * the SAME index arithmetic as render_group_bytes() above, as a macro rather
+ * than a function call, geometry-selected by the same TERM_TIMEX/TERM_ZX
+ * macro every other geometry-dependent header switches on (see screen.h).
+ * Written once here so src/blit_hires.c's and src/blit_ula.c's
+ * blit_row_groups() can use ONE expression instead of each hand-copying its
+ * own geometry's formula (see docs/perf/benchmarks.md, "I5: macro/inline vs.
+ * hand-duplicated formulas" for the measurement that justifies this
+ * collapse). render_group_bytes() itself is unchanged and stays the
+ * host-tested, function-call form test_render.c exercises; this macro is a
+ * second expression of the identical formula, for the one call site where a
+ * real CALL was measured too expensive.
+ */
+#if defined(TERM_TIMEX)
+#define RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2) \
+    do { \
+        u8 render_group_bytes_fi_ = (u8)(1u + 3u * ((g) >> 1)); \
+        if (((g) & 1u) == 0u) { \
+            (idx0) = render_group_bytes_fi_;         (file0) = 0u; \
+            (idx1) = render_group_bytes_fi_;         (file1) = 1u; \
+            (idx2) = (u8)(render_group_bytes_fi_ + 1u); (file2) = 0u; \
+        } else { \
+            (idx0) = (u8)(render_group_bytes_fi_ + 1u); (file0) = 1u; \
+            (idx1) = (u8)(render_group_bytes_fi_ + 2u); (file1) = 0u; \
+            (idx2) = (u8)(render_group_bytes_fi_ + 2u); (file2) = 1u; \
+        } \
+    } while (0)
+#elif defined(TERM_ZX)
+#define RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2) \
+    do { \
+        (idx0) = (u8)(1u + 3u * (g)); \
+        (idx1) = (u8)((idx0) + 1u); \
+        (idx2) = (u8)((idx0) + 2u); \
+        (file0) = 0u; \
+        (file1) = 0u; \
+        (file2) = 0u; \
+    } while (0)
+#endif
 
 #endif /* RENDER_GEOM_H */
