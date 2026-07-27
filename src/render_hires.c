@@ -63,3 +63,31 @@ void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
         od[fi + 2u] = packed[2];
     }
 }
+
+/*
+ * PURE: destination bytes for four-cell dirty group `g`.
+ *
+ * Eight cells span six scanline bytes -- three consecutive indices in each
+ * display file, exactly as render_row_bytes lays them out above. Group `g` is
+ * half of one such eight-cell block: an even group takes the block's first
+ * three destination writes (ev[fi], od[fi], ev[fi+1]); an odd group takes the
+ * remaining three (od[fi+1], ev[fi+2], od[fi+2]), where fi = 1 + 3*(g/2).
+ *
+ * file3[k] == 0 selects the even file (ev), 1 selects the odd file (od) --
+ * indices/files returned rather than pointers, so this needs no display
+ * memory and is host-testable.
+ */
+void render_group_bytes(u8 g, u8 *idx3, u8 *file3)
+{
+    u8 fi = (u8)(1u + 3u * (g >> 1));
+
+    if ((g & 1u) == 0u) {
+        idx3[0] = fi;       file3[0] = 0u;   /* ev[fi]      */
+        idx3[1] = fi;       file3[1] = 1u;   /* od[fi]      */
+        idx3[2] = (u8)(fi + 1u); file3[2] = 0u; /* ev[fi+1] */
+    } else {
+        idx3[0] = (u8)(fi + 1u); file3[0] = 1u; /* od[fi+1] */
+        idx3[1] = (u8)(fi + 2u); file3[1] = 0u; /* ev[fi+2] */
+        idx3[2] = (u8)(fi + 2u); file3[2] = 1u; /* od[fi+2] */
+    }
+}

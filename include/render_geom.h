@@ -22,4 +22,18 @@ void render_cell_span(u8 col, u8 *byte_idx, u8 *sh, u8 *mask0, u8 *mask1);
  * (ev, od); the ULA build writes one and ignores `od`. */
 void render_row_bytes(const u8 *g, u8 *ev, u8 *od);
 
+/*
+ * Destination bytes for four-cell dirty group `g`, in left-to-right scanline
+ * order. Pure index arithmetic, not pointers: the caller supplies its own
+ * `ev`/`od` (or single-file) row buffer, so this needs no display memory and
+ * is host-testable.
+ *
+ * idx3: the three scanline-byte indices (1..30, inside the row's margin).
+ * file3: which row buffer each index belongs to -- 0 for `ev` (or the ULA's
+ *        single file), 1 for `od`. The ULA build (one file) sets file3 all 0.
+ *
+ * The future ULA blitter (render_ula.c) exports the same name so blit_ula.c
+ * can be written in this exact shape. */
+void render_group_bytes(u8 g, u8 *idx3, u8 *file3);
+
 #endif /* RENDER_GEOM_H */

@@ -13,6 +13,7 @@
 #include "render.h"
 #include "render_geom.h"
 #include "font.h"
+#include "screen.h"
 
 static int checks = 0;
 #define CHECK(cond) do { assert(cond); ++checks; } while (0)
@@ -343,6 +344,38 @@ static void test_glyph_row_byte_is_shared(void)
     CHECK((render_glyph_row_byte(a, ATTR_REVERSE, 3) & 0x03u) == 0u);
 }
 
+/*
+ * Task 5: the four-cell-group -> three-scanline-byte mapping that blit_flush's
+ * fast path uses to write only the groups a row's dirty bitmap marks. Pure
+ * arithmetic (no display memory needed), so it is host-testable even though
+ * the blitter that consumes it is not. Every group's three bytes must be
+ * distinct, inside the margins (index 1..30 -- 0 and 31 are the untouched
+ * margin columns), and never claimed by two groups: that would mean one
+ * group's write clobbers another's pixels.
+ */
+static void test_group_byte_mapping(void)
+{
+    u8 idx[3], file[3];
+    u8 g, k;
+    u8 seen_ev[32], seen_od[32];
+
+    for (k = 0; k < 32u; ++k) { seen_ev[k] = 0; seen_od[k] = 0; }
+
+    for (g = 0; g < DIRTY_GROUPS; ++g) {
+        render_group_bytes(g, idx, file);
+        for (k = 0; k < 3u; ++k) {
+            CHECK(idx[k] >= 1u && idx[k] <= 30u);
+            if (file[k] == 0u) {
+                CHECK(seen_ev[idx[k]] == 0u);
+                seen_ev[idx[k]] = 1u;
+            } else {
+                CHECK(seen_od[idx[k]] == 0u);
+                seen_od[idx[k]] = 1u;
+            }
+        }
+    }
+}
+
 int main(void)
 {
     test_render_cell_normal();
@@ -361,6 +394,7 @@ int main(void)
     test_row_bytes_matches_reference();
     test_attributes_stay_inside_the_cell();
     test_glyph_row_byte_is_shared();
+    test_group_byte_mapping();
 
     printf("render: %d checks passed\n", checks);
     return 0;

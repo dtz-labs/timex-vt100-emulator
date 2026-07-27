@@ -1,0 +1,168 @@
+# Renderer benchmarks
+
+T-state measurements for the hot renderer/scroll paths, produced by
+`tools/bench.sh` (harness sources in `tools/bench/`) using `z88dk-ticks`.
+CI prints these; it does not enforce them -- a regression threshold would
+need a pinned compiler image, and `.github/workflows/ci.yml` uses
+`z88dk/z88dk:latest`.
+
+Numbers are **only comparable within one z88dk build**. The compiler version
+is recorded with every row below.
+
+## How these are measured
+
+Each harness (`tools/bench/bench_<path>.c`) links the real project sources
+(`screen.c`, `render.c`, `render_hires.c`, `blit_hires.c`, `hires.c`,
+`font.c`) and drives ONE public entry point from a known state, bracketed by
+`bench_mark_a()` / `bench_mark_b()` (`tools/bench/bench_common.c`, a
+separate translation unit so the calls cannot be inlined away).
+`z88dk-ticks` resets its cycle counter the instant PC reaches
+`bench_mark_a`'s entry and stops it the instant PC reaches `bench_mark_b`'s
+entry, so the printed number is the T-states strictly between those two
+calls, plus a small fixed overhead (`bench_mark_a`'s own body plus the
+`CALL` that enters `bench_mark_b`, on the order of 40 T) -- negligible
+against the paths measured here.
+
+**z88dk-ticks argument order matters.** `z88dk-ticks` parses arguments left
+to right and loads `<input_file>` the instant it reaches the (flag-less)
+filename token, using whatever `load_address` (`-l`) it has parsed *so
+far*. Putting the filename before `-l` loads the file at address 0 while
+`-pc`/`-l` still tells the CPU to start executing at `$8000` -- a silent
+walk through unrelated/zero memory that still happens to cross the
+`-start`/`-end` label addresses in the right order, producing a
+plausible-looking but completely meaningless number (confirmed by tracing:
+it exactly matches a NOP-count between the two addresses). `tools/bench.sh`
+puts every flag, including `-l`, before the filename. This cost real time to
+find -- an earlier draft of this script had it backwards and reported
+numbers around 24-131,072 T for every path, suspiciously round and
+identical across totally different code.
+
+Rows:
+
+- `row_normal` -- `blit_flush()` with one dirty row, 80 cells, `attr == 0`.
+- `row_attrs` -- same, but every cell carries `ATTR_REVERSE` (forces the
+  slow fallback for all 20 groups).
+- `row_blank` -- one dirty row, fully blank (space, `attr == 0`).
+- `scroll_model` -- `screen_scroll()` over the full 24-row region, filled.
+- `scroll_vram` -- `blit_scroll_region()` over the full 24-row region.
+
+## Reference: the performance review's own numbers (true pre-work baseline)
+
+**Commit:** `7323852` ("ZX Spectrum 40-column target: design, plans, and
+project rename" -- the commit that added
+`docs/superpowers/reviews/2026-07-26-perf-review.md`, before any of Tasks
+1-9 existed; the 80-column renderer was still only a plan at this point).
+**Compiler:** `zcc +zx -SO3 -clib=sdcc_iy` (exact z88dk build/version not
+recorded in the review).
+
+| Path | Measured | Diagnostic variant (inlined) |
+|---|---:|---:|
+| One normal dirty row, 64 columns (old renderer) | 176,039 T | 76,055 T |
+| Screen-model scroll | 449,787 T | 67,609 T |
+| Video-RAM scroll | 682,052 T | 345,464 T |
+| Planned 80-column row (not yet implemented) | 670,861 T | 194,617 T |
+
+This is the number this task's brief points at (194,617 T) as the "near"
+target for a normal 80-column row. It comes from a diagnostic prototype the
+review built, not from the codebase as it exists after Tasks 1-4 -- see the
+"before" row below for that.
+
+## Before (this task's own baseline, at the commit prior to its change)
+
+**Commit:** `da2ac39` (end of Task 4: "main: toggle the cursor with XOR
+instead of dirtying its rows" -- the last commit before this task's
+`blit_flush` rewrite; Tasks 1-4's dirty-group tracking, memmove scroll, and
+exact-cursor-toggle are already in place, but `blit_flush` still repaints
+whole rows unconditionally).
+**Compiler:** `zcc - Frontend for the z88dk Cross-C Compiler -
+v23854-4d530b6eb7-20251002`.
+
+| Path | T-states |
+|---|---:|
+| row_normal | 600,728 |
+| row_attrs | 609,688 |
+| row_blank | 600,728 |
+| scroll_model | 101,533 |
+| scroll_vram | 680,099 |
+
+`row_blank` equals `row_normal` exactly: the pre-Task-5 `blit_flush` has no
+blank-row fast path, so a fully blank row costs the same as a fully
+populated one -- both go through the same whole-row `render_row_fast()`
+regardless of content. This is expected, and it is exactly what Task 5
+removes.
+
+## After (this task: dirty-group rendering, inline `attr==0` path, blank-row fast path)
+
+**Commit:** see the commit this file is checked in with (`blit: render only
+dirty groups, with normal and blank fast paths`).
+**Compiler:** `zcc - Frontend for the z88dk Cross-C Compiler -
+v23854-4d530b6eb7-20251002` (same build as "before", for a fair comparison).
+
+| Path | T-states | vs. before | vs. review's diagnostic target |
+|---|---:|---:|---:|
+| row_normal | 267,267 | 2.25x faster | 1.37x slower than 194,617 |
+| row_attrs | 549,093 | 1.11x faster | -- |
+| row_blank | 40,198 | 14.9x faster | -- |
+| scroll_model | 101,508 | unchanged (not touched by this task) | -- |
+| scroll_vram | 680,099 | unchanged (not touched by this task) | -- |
+
+`scroll_model` and `scroll_vram` are included for completeness (this
+harness benchmarks the same code Tasks 3/4 already optimised) and, as
+expected, come back essentially identical to "before" -- neither path is
+touched by this task, which is a useful sanity check that nothing regressed
+elsewhere.
+
+### The `row_normal` gap: investigated, not silently accepted
+
+**`row_normal` did not land near the review's 194,617 T target.** Per the
+brief's explicit instruction ("If it does not, stop and investigate rather
+than proceeding"), this was investigated rather than reported as a plain
+success:
+
+1. **First implementation measured 318,554 T** (worse than the eventual
+   number below). Investigation found a real bug: `row_scanline_offset()`
+   and `font_glyph()` were being recomputed *inside the per-group loop*,
+   once per scanline -- 160 calls each for a 20-group row instead of 8 (for
+   the scanline-offset table, shared by every group) and 80 (for the glyph
+   lookups, 4 per group). Hoisting both to run once per row (offsets) or
+   once per group (glyphs) dropped the number to 276,448 T.
+2. Two further C-level restructurings were tried and measured:
+   scalar locals instead of small arrays for the group's destination
+   indices (276,448 -> 278,168 T, no real change), and walking pointers
+   instead of array indexing for the per-scanline glyph/offset reads
+   (278,168 -> 286,382 T, slightly worse -- reverted in spirit, kept for
+   the offsets since it was harmless there).
+3. Isolated microbenchmarks of the two *new* per-group helpers this task
+   introduces (`tools/bench` ad hoc, not part of the committed harness)
+   found real, substantial SDCC-ABI call overhead: `screen_group_dirty()`
+   ~550 T/call, `render_group_bytes()` ~975 T/call, `font_glyph()` ~370
+   T/call -- all far higher than a hand-written Z80 equivalent, an
+   inherent characteristic of this compiler's stack-marshalled calling
+   convention for small functions, not a logic bug. Inlining
+   `screen_group_dirty`'s bit test and `render_group_bytes`'s index
+   arithmetic directly into `blit_row_groups` (documented as a deliberate,
+   tested-formula duplication -- both remain defined and host-tested
+   elsewhere) recovered another ~19,000 T, landing at the reported
+   267,267 T.
+
+**Conclusion:** the remaining ~73,000 T gap to 194,617 T is attributed to
+SDCC's (`zsdcc`, selected by `-clib=sdcc_iy`) code generation quality for
+this kind of pointer/bitfield-heavy C on Z80 -- confirmed by direct
+disassembly of the generated `blit_row_groups` code, which repeatedly
+reloads values through `IX`-relative stack addressing rather than keeping
+them in registers across the 8-scanline inner loop, and by the measured
+per-call costs above. Further C-source restructuring did not close it in
+three attempts. The review itself names the fallback for exactly this
+situation: "An assembly normal path if the C implementation still misses
+the target" (`docs/superpowers/reviews/2026-07-26-perf-review.md`,
+recommended-order item 7). This task does not implement that assembly path
+-- it is out of scope for a C-level task and is flagged for whoever picks
+up performance work next.
+
+The **shape** of the change (group loop, attr==0 inline path with no helper
+calls or temporary arrays inside the scanline loop, blank-row block clear)
+matches the brief exactly, and it is a genuine, large improvement (2.25x
+over the immediately-preceding commit, and would be roughly 2.5x over the
+true pre-work baseline once the 64-vs-80-column difference is accounted
+for) -- it just does not reach the specific number the review's own
+diagnostic prototype hit.
