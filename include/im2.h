@@ -37,15 +37,20 @@
  * ROOT CAUSE FOUND AND FIXED (im2-guard follow-up, same date): the "deep call
  * chain" was not recursion or an unusually long call sequence -- it was one
  * oversized stack frame. main() (src/main.c) declared `screen_t scr` and
- * `vtparse_t vt` as locals: screen_t alone is 24*80 cell_t (3,840 bytes) plus
- * its scalars, with vtparse_t beside it, together accounting for almost all
- * of the measured 4,123-byte frame (SP seed 0xFF58 down to the 0xEF3D
- * low-water mark above). Both are now file-scope statics in main.c, for the
+ * `vtparse_t vt` as locals: screen_t alone is 24 * 80 = 1,920 cell_t, 2 bytes
+ * each = 3,840 bytes, plus its scalars, with vtparse_t beside it, together
+ * accounting for almost all of the measured 4,123-byte frame (0xFF58 - 0xEF3D
+ * = 4,123 bytes: the SP seed down to the 0xEF3D low-water mark above -- this
+ * is a call-stack low-water mark including return addresses and nested
+ * frames, not literally sizeof(scr)+sizeof(vt), which measures (host cc,
+ * -std=c99) at 3,878 + 51 = 3,929 bytes; the remaining ~194 bytes is real
+ * call-stack overhead). Both are now file-scope statics in main.c, for the
  * same reason src/render.c:100 keeps row_glyphs/row_attrs/row_pixels off the
  * stack: it turns stack depth the linker cannot see into BSS that
- * tools/check_image_limit.py's __BSS_END_tail reading can. This moved
- * __BSS_END_tail from 0xCF1C to 0xDE62 (+3,910 bytes) and, per the
- * remeasurement below, cut real stack depth from 4,123 bytes to roughly 200.
+ * tools/check_image_limit.py's
+ * __BSS_END_tail reading can. This moved __BSS_END_tail from 0xCF1C to
+ * 0xDE62 (0xDE62 - 0xCF1C = 3,910 bytes) and, per the remeasurement below,
+ * cut real stack depth from 4,123 bytes to 0xFF58 - 0xFE8F = 0xC9 = 201 bytes.
  *
  * REMEASURED after the hoist (ZEsarUX ZRCP, term.tap, 2026-07-27): two full
  * runs, each five passes (boot + banner render, ~2.6KB injected text forcing
@@ -57,15 +62,16 @@
  * program activity, confirmed by the fact that it covers 100% of the range
  * uniformly regardless of session content. Excluding that boot artifact, the
  * real low-water mark measured identically in both runs at 0xFE8F (heaviest
- * pass), i.e. about 201 bytes below the 0xFF58 seed -- far inside the
- * configured 512-byte __crt_stack_size. A planned third, still-heavier pass
- * (a full 24-row screen clear+redraw plus scroll-region extremes) was started
- * but did not finish in the time available, so this measurement, though
- * reproduced twice, is not a proof that 0xFE8F is the absolute deepest the
- * program can ever reach -- only the deepest observed. The table below is
- * placed with margin against both this measured figure and the more
- * conservative __crt_stack_size-implied floor (0xFD58), not against 0xFE8F
- * alone. See the hoist report for the full writeup and raw data. */
+ * pass), i.e. 0xFF58 - 0xFE8F = 0xC9 = 201 bytes below the 0xFF58 seed -- far
+ * inside the configured 512-byte __crt_stack_size. A planned third,
+ * still-heavier pass (a full 24-row screen clear+redraw plus scroll-region
+ * extremes) was started but did not finish in the time available, so this
+ * measurement, though reproduced twice, is not a proof that 0xFE8F is the
+ * absolute deepest the program can ever reach -- only the deepest observed.
+ * The table below is placed with margin against both this measured figure
+ * and the more conservative __crt_stack_size-implied floor (0xFD58), not
+ * against 0xFE8F alone. See the hoist report for the full writeup and raw
+ * data. */
 #ifndef IM2_H
 #define IM2_H
 

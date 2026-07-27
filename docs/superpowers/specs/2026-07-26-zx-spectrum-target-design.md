@@ -62,12 +62,14 @@ A universal binary needs the width to be runtime state. That means:
 
 The memory pressure that first raised the question turned out to be a red
 herring: what looked like the program's headroom was actually the gap before a
-hardcoded IM2 table — 1448 bytes on the older 64-column `master` build, down to
-about 1,000 bytes on this branch's 80-column image — with roughly 11 KB sitting
-unused above it (§8, which relocates that table to reclaim the gap rather than
-leaving it as a hazard). Two TAPs are therefore chosen on **simplicity**, not on
-memory — they delete a refactor of the pure core that would otherwise be the
-largest single piece of this work.
+hardcoded IM2 table — `0xD300 - 0xCD58 = 1,448` bytes on the older 64-column
+`master` build, down to about 1,000 bytes on this branch's 80-column image —
+with `0xFD58 - 0xD4D4 = 0x2884 = 10,372` bytes (~10.1 KB; an earlier note here
+said "roughly 11 KB", which the arithmetic does not support) sitting unused
+above it (§8, which relocates that table to reclaim the gap rather than
+leaving it as a hazard). Two TAPs are therefore chosen on **simplicity**, not
+on memory — they delete a refactor of the pure core that would otherwise be
+the largest single piece of this work.
 
 The cost of D17 is two artifacts and a user who must pick the right one. That is
 softened by D21: the Spectrum TAP runs on **ZX Spectrums and the TC2048**, so it
@@ -312,23 +314,26 @@ Measured from `build/term.map` of the current 80-column build, after hoisting
 0x6000  hi-res odd columns  (free RAM on a Spectrum — no conflict)
 0x8000  program start (ORG)
 0xDE62  end of image (__BSS_END_tail) -- was 0xCF1C before `screen_t scr` and
-        `vtparse_t vt` moved from main()'s stack frame into BSS (+3,910 bytes)
-        3,998 bytes free
+        `vtparse_t vt` moved from main()'s stack frame into BSS
+        (0xDE62 - 0xCF1C = 3,910 bytes)
+        0xEE00 - 0xDE62 = 3,998 bytes free
 0xEE00  IM2 vector table, I = 0xEE                      <- IM2_TABLE_BASE / IM2_VECTOR_PAGE in include/im2.h
         257 bytes are architecturally required (0xEE00-0xEF00, one full page
         plus one byte for the worst-case vector read landing on the table's
         last byte). The installer writes exactly those 257 bytes with a
         single memset. The gate deliberately reserves one byte more than
-        that, 258 (0xEE00-0xEF01), as a margin against a future installer
-        change that writes past its own boundary -- not because the code
-        touches that 258th byte today.
+        that, 258 (0xEE00-0xEF01 = 258 bytes: 0xEF01 - 0xEE00 + 1), as a
+        margin against a future installer change that writes past its own
+        boundary -- not because the code touches that 258th byte today.
 0xEFEF  IM2 trampoline: JP keyboard_im2_isr, 3 bytes    <- IM2_TRAMPOLINE in include/im2.h
-        0xEFF2-0xFE8E = 3,741 bytes measured clear to the post-hoist low-water
-        mark below; 0xEFF2-0xFD57 = 3,430 bytes clear of the more
-        conservative __crt_stack_size-implied floor
+        table+trampoline end at 0xEFF2 (0xEFEF + 3 bytes); 0xFE8F - 0xEFF2 =
+        3,741 bytes measured clear to the post-hoist low-water mark below;
+        0xFD58 - 0xEFF2 = 3,430 bytes clear of the more conservative
+        __crt_stack_size-implied floor
 0xFD58  stack floor AS __crt_stack_size WOULD IMPLY (__register_sp 0xFF58
-        minus __crt_stack_size 0x0200) -- post-hoist, this is now the MORE
-        conservative of the two figures (see narrative below), not the less
+        minus __crt_stack_size 0x0200 = 0xFD58) -- post-hoist, this is now
+        the MORE conservative of the two figures (see narrative below), not
+        the less
 0xFE8F  MEASURED low-water mark of real call/stack depth on target, after the
         hoist (im2-guard follow-up; not a linker symbol) -- see below
 0xFF58  stack seed
@@ -348,9 +353,10 @@ Two hazards follow, and both are addressed by D23:
    because after relocation both live in the region the stack grows down into.
    Wired into `make tap`, `make tap-zx`, and CI.
 2. **An artificially small margin.** The table originally sat at `0xD300`, right
-   above the image, leaving only about 1,000 bytes of headroom while roughly
-   11 KB between the trampoline and the stack sat unused. Relocating the table
-   raises the image margin to several kilobytes.
+   above the image, leaving only about 1,000 bytes of headroom while
+   `0xFD58 - 0xD4D4 = 0x2884 = 10,372` bytes (~10.1 KB) between the trampoline
+   at `0xD4D4` and the stack sat unused. Relocating the table raises the image
+   margin to several kilobytes.
 
    The address is not free choice — it must satisfy all of:
 
@@ -378,16 +384,20 @@ Two hazards follow, and both are addressed by D23:
 
    **It turned out to be one oversized stack frame, not a chain.** `main()`
    (`src/main.c`) declared `screen_t scr` and `vtparse_t vt` as locals:
-   `screen_t` alone is `24 * 80` `cell_t` (3,840 bytes) plus its scalars, with
-   `vtparse_t` beside it, together accounting for nearly all of the measured
-   4,123 bytes (`0xFF58` seed down to `0xEF3D`). The im2-guard follow-up
+   `screen_t` alone is `24 * 80 = 1,920` `cell_t`, 2 bytes each = `3,840`
+   bytes, plus its scalars, with `vtparse_t` beside it, together accounting
+   for nearly all of the measured `0xFF58 - 0xEF3D = 4,123` bytes (the `0xFF58`
+   seed down to `0xEF3D` -- a call-stack low-water mark that includes return
+   addresses and nested frames, not literally `sizeof(scr) + sizeof(vt)`,
+   which is `3,840 + 38 (scr scalars) + 51 (vt) = 3,929` bytes -- the
+   remaining ~194 bytes is real call-stack overhead). The im2-guard follow-up
    hoisted both to file-scope statics in `main.c`, for the same reason
    `render.c:100` keeps `row_glyphs`/`row_attrs`/`row_pixels` off the stack:
    it turns stack depth the linker cannot see into BSS that
    `tools/check_image_limit.py`'s `__BSS_END_tail` reading can. That grew the
-   image end from `0xCF1C` to `0xDE62` (+3,910 bytes) -- so the table has to
-   move again, this time because the image grew, not because the stack still
-   reaches as deep as it used to.
+   image end from `0xCF1C` to `0xDE62` (`0xDE62 - 0xCF1C = 3,910` bytes) -- so
+   the table has to move again, this time because the image grew, not
+   because the stack still reaches as deep as it used to.
 
    Remeasuring after the hoist (ZEsarUX ZRCP, same target: two full runs of
    five passes each -- boot + banner render, ~2.6 KB of injected text forcing
@@ -398,14 +408,15 @@ Two hazards follow, and both are addressed by D23:
    (`0xDE62`) to `0xFFFF` written 3-5 times, uniformly, regardless of session
    content -- the Spectrum's own power-on RAM test, not program activity, and
    excluded from the figures below. Past that artifact, the real low-water
-   mark measured identically in both runs at **0xFE8F**, about 201 bytes below
-   the `0xFF58` seed -- comfortably inside the 512-byte `__crt_stack_size`
-   budget, down from 4,123 measured bytes before the hoist. A third,
-   still-heavier pass (a full 24-row screen clear+redraw plus scroll-region
-   extremes, meant to check whether the mark trends deeper still, as it had
-   across passes in the prior fix wave) was started but did not finish in the
-   time available, so this measurement, though reproduced twice, is not proof
-   that `0xFE8F` is the program's absolute deepest reach.
+   mark measured identically in both runs at **0xFE8F** (`0xFF58 - 0xFE8F =
+   201` bytes below the `0xFF58` seed) -- comfortably inside the 512-byte
+   `__crt_stack_size` budget, down from `0xFF58 - 0xEF3D = 4,123` measured
+   bytes before the hoist. A third, still-heavier pass (a full 24-row screen
+   clear+redraw plus scroll-region extremes, meant to check whether the mark
+   trends deeper still, as it had across passes in the prior fix wave) was
+   started but did not finish in the time available, so this measurement,
+   though reproduced twice, is not proof that `0xFE8F` is the program's
+   absolute deepest reach.
 
    Given that gap, `0xEE00` is chosen with margin against **both** figures,
    not `0xFE8F` alone: it gives `0xEE00 - 0xDE62` = 3,998 bytes of image
@@ -422,11 +433,13 @@ Two hazards follow, and both are addressed by D23:
    **The gate's stack-floor arithmetic is, for the first time, on the
    conservative side of measured reality.** Before the hoist, the assumed
    floor `0xFD58` (`__register_sp` minus `__crt_stack_size`) understated real
-   usage by roughly 3,900 bytes (measured: `0xEF3D`, well past `0xFD58`).
-   After the hoist, measured usage (`0xFE8F`) sits *above* (shallower than)
-   the assumed floor by 311 bytes (`0xFE8F - 0xFD58`). The 512-byte configured
-   allowance is no longer fiction the program blows through by roughly 8x --
-   it is now bigger than what two measured sessions actually used. Whether it
+   usage: measured depth reached `0xEF3D`, and `0xFD58 - 0xEF3D = 0xE1B =
+   3,611` bytes past what the assumption allowed for. After the hoist,
+   measured usage (`0xFE8F`) sits *above* (shallower than) the assumed floor:
+   `0xFE8F - 0xFD58 = 311` bytes of margin. The 512-byte configured allowance
+   is no longer fiction the program blows through (measured depth
+   `0xFF58 - 0xEF3D = 4,123` bytes was over 8x the 512-byte budget) -- it is
+   now bigger than what two measured sessions actually used. Whether it
    is bigger than what the untested heaviest session would use is the one
    question this measurement does not answer; `tools/check_image_limit.py`'s
    `stack_floor = __register_sp - __crt_stack_size` computation was left
