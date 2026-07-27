@@ -21,10 +21,17 @@
 #include "keybuf.h"
 #include "build_meta.h"
 #include "im2.h"
+#include "machine.h"
 #include <z80.h>
 #include <intrinsic.h>
 #include <stdint.h>
 #include <string.h>
+
+#ifdef TERM_TIMEX
+#define BANNER_HW "Timex (SCLD)  80x24 hi-res"
+#else
+#define BANNER_HW "ZX Spectrum (ULA)  40x24"
+#endif
 
 static const u8 demo_stream[] =
     "\x1b[2J"
@@ -58,6 +65,45 @@ static u8 irq_nkeys;
 
 static void beep_bell(void);
 static void beep_overrun(void);
+
+#ifdef TERM_TIMEX
+/* The terminal's renderer is not initialised, and on a machine without an SCLD
+ * it would paint an unreadable half-image. Use the boot-time ULA text mode. */
+static void guard_refuse(void) __naked
+{
+    __asm
+        di
+        ld      hl,#guard_msg
+guard_loop:
+        ld      a,(hl)
+        or      a
+        jr      z,guard_halt
+        inc     hl
+        push    hl
+        rst     #0x10
+        pop     hl
+        jr      guard_loop
+guard_halt:
+        halt
+        jr      guard_halt
+guard_msg:
+        .ascii  "THIS BUILD NEEDS A TIMEX (SCLD)."
+        .db     13
+        .ascii  "USE THE -ZX TAP, OR HOLD CAPS SHIFT."
+        .db     13,0
+    __endasm;
+}
+#endif
+
+/* Beside the existing demo_stream feed loop in main(): feeds a NUL-terminated
+ * C string through the parser one byte at a time. */
+static void vt_feed_text(vtparse_t *v, screen_t *s, const char *p)
+{
+    while (*p != '\0') {
+        vt_feed(v, s, (u8)*p);
+        ++p;
+    }
+}
 
 static void pump_vt_replies(vtparse_t *vt)
 {
@@ -272,6 +318,18 @@ int main(void)
     u16 i = 0;
     u8 conn_flags;
 
+#ifdef TERM_TIMEX
+    /* This build sends half its pixels to 0x6000, which a plain Spectrum's
+     * ULA never displays -- an unreadable half-image, with no clue why, after
+     * a tape load that costs minutes on real hardware. Refuse instead. Must
+     * run before video_init: the probe writes port 0xFF, the display mode
+     * register, and CAPS SHIFT is the documented bypass for clones whose port
+     * decoding fools the probe. */
+    if (!machine_has_scld() && !machine_caps_shift_held()) {
+        guard_refuse();     /* prints and halts; never returns */
+    }
+#endif
+
     /* Init hardware: hi-res white-on-black, clear screen. */
     video_init(1);  /* white-on-black = 1 */
     video_clear();
@@ -288,6 +346,10 @@ int main(void)
         vt_feed(&vt, &scr, demo_stream[i]);
         ++i;
     }
+
+    /* Banner names the build (compile-time fact), not a measurement -- so
+     * naming stays correct even if a clone's port decoding fools the probe. */
+    vt_feed_text(&vt, &scr, "\r\nHW: " BANNER_HW "\r\n");
 
     /* Render everything to display. */
     blit_flush(&scr);

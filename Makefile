@@ -3,7 +3,9 @@
 # The z88dk target remains +zx because TC/TS 2048/2068 machines are
 # Spectrum-compatible at the binary level; the program selects Timex SCLD
 # hi-res mode itself via port 0xff. Running this on non-Timex machines is not
-# supported because the terminal relies on 512x192 hi-res video.
+# supported because the terminal relies on 512x192 hi-res video -- src/main.c
+# probes for an SCLD (src/machine.c) and refuses to start without one, rather
+# than painting an unreadable half-image.
 
 BUILD_DIR ?= build
 DIST_DIR ?= dist
@@ -61,7 +63,11 @@ endif
 ZCC ?= $(if $(ZCC_DETECTED),$(ZCC_DETECTED),zcc)
 Z88DK_TARGET ?= +zx
 Z88DK_CFLAGS ?= -SO3 -clib=sdcc_iy -iquote$(BUILD_DIR) -iquote$(CURDIR)/include
-Z88DK_DEFS ?=
+# Both build targets ($(TAP) and $(IF1_TAP)) are the Timex build until Task 9
+# adds the ZX_SOURCES/ZX_DEFS build matrix and its own tap-zx/if1-zx targets.
+# TERM_TIMEX gates src/main.c's wrong-machine guard and its BANNER_HW string,
+# and matches the TERM_DEF test/run.sh already uses for the host suite.
+Z88DK_DEFS ?= -DTERM_TIMEX
 Z88DK_LDFLAGS ?= -m
 Z88DK_PATH = $(if $(Z88DK_BIN),$(Z88DK_BIN):$(PATH),$(PATH))
 Z88DK_ENV = PATH="$(Z88DK_PATH)" $(if $(ZCCCFG),ZCCCFG="$(ZCCCFG)")
@@ -78,8 +84,8 @@ TERMINFO_DIR ?= $(HOME)/.terminfo
 # Explicit, not a wildcard: render_hires.c/render_ula.c and blit_hires.c/
 # blit_ula.c are ALTERNATIVES exporting the same symbols. A wildcard would link
 # both and fail on duplicate symbols.
-COMMON_SOURCES := src/conn.c src/font.c src/keybuf.c src/keymap.c src/main.c \
-	src/render.c src/screen.c src/vtparse.c
+COMMON_SOURCES := src/conn.c src/font.c src/keybuf.c src/keymap.c src/machine.c \
+	src/main.c src/render.c src/screen.c src/vtparse.c
 TIMEX_SOURCES := $(COMMON_SOURCES) src/hires.c src/render_hires.c \
 	src/blit_hires.c src/video_hires.c
 SOURCES := $(TIMEX_SOURCES)
