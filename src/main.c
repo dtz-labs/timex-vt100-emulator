@@ -19,8 +19,11 @@
 #include "keymap.h"
 #include "keybuf.h"
 #include "build_meta.h"
+#include "im2.h"
 #include <z80.h>
 #include <intrinsic.h>
+#include <stdint.h>
+#include <string.h>
 
 static const u8 demo_stream[] =
     "\x1b[2J"
@@ -187,28 +190,27 @@ void keyboard_im2_isr(void) __naked
     __endasm;
 }
 
-static void install_keyboard_im2(void) __naked
+static void install_keyboard_im2(void)
 {
+    u8 *table = (u8 *)(uintptr_t)IM2_TABLE_BASE;
+    u8 *tramp = (u8 *)(uintptr_t)IM2_TRAMPOLINE;
+    u16 isr = (u16)(uintptr_t)&keyboard_im2_isr;
+
+    intrinsic_di();
+
+    /* 257 entries: the vector read can land on the last table byte and still
+     * needs a high byte after it. */
+    memset(table, IM2_TABLE_FILL, 257u);
+
+    tramp[0] = 0xC3u;              /* JP nnnn */
+    tramp[1] = (u8)(isr & 0xFFu);
+    tramp[2] = (u8)(isr >> 8);
+
     __asm
-        di
-        ld      hl,#0xD300
-        ld      de,#0xD301
-        ld      bc,#257
-        ld      a,#0xD4
-        ld      (hl),a
-        ldir
-        ld      hl,#0xD4D4
-        ld      (hl),#0xC3
-        inc     hl
-        ld      de,#_keyboard_im2_isr
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        ld      a,#0xD3
+        ld      a,#IM2_VECTOR_PAGE
         ld      i,a
         im      2
         ei
-        ret
     __endasm;
 }
 
@@ -247,10 +249,25 @@ static void sync_keyboard_modes(const screen_t *scr)
     keymap_set_cursor_application((scr->mode & MODE_CURSOR_APPLICATION) != 0);
 }
 
+/*
+ * File-scope, not locals of main(), for the same reason render.c:100 keeps
+ * row_glyphs/row_attrs/row_pixels off the stack: a Z80 stack frame holding
+ * them would be enormous, and the linker cannot see stack usage at all, only
+ * BSS. screen_t is 24*80 cell_t plus its scalars (COLS=80, ROWS=24) and
+ * vtparse_t sits beside it; together they were the dominant part of a
+ * measured 4,123-byte main() stack frame (SP seed 0xFF58 down to a low-water
+ * mark of 0xEF3D -- see include/im2.h and the fix-wave report) even though
+ * main() never recurses and has no other large locals. Moving them here
+ * turns that frame into BSS that tools/check_image_limit.py's __BSS_END_tail
+ * reading actually accounts for, instead of stack depth the linker never
+ * modeled. Safe because main() runs once, is never re-entered, and both are
+ * always passed by pointer to the functions that use them.
+ */
+static screen_t scr;
+static vtparse_t vt;
+
 int main(void)
 {
-    screen_t scr;
-    vtparse_t vt;
     u16 i = 0;
     u8 conn_flags;
 
