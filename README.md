@@ -134,11 +134,16 @@ make release-build VERSION=0.1.0
 This creates:
 
 ```text
-dist/zx-vt102-terminal-0.1.0.tap
-dist/zx-vt102-terminal-0.1.0-if1.tap
-dist/zx-vt102-terminal-0.1.0-zx.tap
-dist/zx-vt102-terminal-0.1.0-zx-if1.tap
+dist/zx-vt102-terminal-0.1.0.tap        # Timex, 80 columns (same file as build/term.tap)
+dist/zx-vt102-terminal-0.1.0-if1.tap    # Timex, 80 columns, Interface 1
+dist/zx-vt102-terminal-0.1.0-zx.tap     # ZX Spectrum, 40 columns (same file as build/term-zx.tap)
+dist/zx-vt102-terminal-0.1.0-zx-if1.tap # ZX Spectrum, 40 columns, Interface 1
 ```
+
+Careful with the first filename: the project is named `zx-vt102-terminal` (it
+predates this repo having an actual ZX Spectrum target), but the *file*
+without a `-zx` suffix is the **Timex-only** 80-column build. The one that
+runs on a real ZX Spectrum is the one with `-zx` in its name.
 
 GitHub releases are built from tags named `v*`, for example `v0.1.0`. The
 release workflow uses the official `z88dk/z88dk:latest` Docker image and
@@ -213,7 +218,11 @@ Backspace, and terminal line discipline.
 
 ## What Can Run Through ZEsarUX
 
-The ZEsarUX workflow has two useful bridge modes.
+The ZEsarUX workflow has two useful bridge modes. The examples below use the
+Timex build (`make run-zrcp`/`shell-zrcp`/`bridge-zrcp` all target
+`build/term.tap`); for the ZX build, run the same Python commands directly
+with `--map build/term-zx.map --cols 40 --term zx-vt102` instead (there is no
+`-zx` variant of these Make targets yet).
 
 Use `shell-zrcp` when you want the Timex to behave like a real terminal attached
 to a Unix process. This mode creates a macOS PTY, sets the terminal size to
@@ -272,7 +281,9 @@ Current practical limits:
 ## Run The Stdio Bridge
 
 Use this for quick testing, piping files, or manually bridging stdin/stdout.
-This is not a full Unix terminal because there is no PTY behind it.
+This is not a full Unix terminal because there is no PTY behind it. As above,
+these examples target the Timex build; swap in `--map build/term-zx.map` for
+the ZX build.
 
 Terminal 1:
 
