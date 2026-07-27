@@ -259,6 +259,21 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
                                          scr->last_scroll_bot,
                                          scr->last_scroll_n)) {
                     changed = 1;
+                } else {
+                    /* blit_scroll_region() only handles n == +-1 today (see
+                     * blit_hires.c/blit_ula.c); a return of 0 means it moved
+                     * no hardware pixels at all for this scroll -- e.g. a
+                     * future SU/SD (CSI S / CSI T) with |n| > 1. The model
+                     * already shifted rows via scroll_region()'s dirty-mark
+                     * migration, which assumes the hardware scroll it rides
+                     * on happened; if it did not, the moved region must be
+                     * re-dirtied here or this silently reintroduces C1 (IL/DL
+                     * corrupting the display) for any n the blitter refuses. */
+                    u8 r;
+                    for (r = scr->last_scroll_top; r <= scr->last_scroll_bot; ++r) {
+                        screen_mark_row(scr, r);
+                    }
+                    changed = 1;
                 }
             }
             pump_vt_replies(vt);

@@ -272,20 +272,44 @@ void screen_erase_display(screen_t *s, u8 mode)
     }
 }
 
+/*
+ * IL/DL have no hardware counterpart: unlike screen_scroll(), which
+ * main.c's pump_conn() follows with blit_scroll_region() whenever
+ * scr->scroll_seq changes, screen_insert_lines()/screen_delete_lines() never
+ * touch scroll_seq, so nothing ever blits a hardware scroll for them. That
+ * makes scroll_region()'s dirty-mark *migration* (moving each surviving
+ * row's marks along with its cells, added so screen_scroll() would not
+ * re-dirty rows the hardware scroll already moved) actively wrong here: a
+ * clean row can be shifted onto a different row's content and stay marked
+ * clean, since nothing else will ever ask the software renderer to repaint
+ * it. Mark the whole moved region dirty after the move so blit_flush() -- the
+ * ONLY path that will ever put these rows on screen -- repaints every row
+ * that changed.
+ */
 void screen_insert_lines(screen_t *s, u8 n)
 {
+    u8 r;
+
     if (s->cy < s->top || s->cy > s->bot) {
         return;
     }
     scroll_region(s, s->cy, s->bot, -(int)n);    /* down: blanks at cursor row */
+    for (r = s->cy; r <= s->bot; ++r) {
+        screen_mark_row(s, r);
+    }
 }
 
 void screen_delete_lines(screen_t *s, u8 n)
 {
+    u8 r;
+
     if (s->cy < s->top || s->cy > s->bot) {
         return;
     }
     scroll_region(s, s->cy, s->bot, (int)n);     /* up: blanks at region bottom */
+    for (r = s->cy; r <= s->bot; ++r) {
+        screen_mark_row(s, r);
+    }
 }
 
 void screen_insert_chars(screen_t *s, u8 n)

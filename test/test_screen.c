@@ -263,6 +263,49 @@ static void test_insert_delete_lines(void)
     CHECK(s.cx == 5 && s.cy == 2);
 }
 
+/*
+ * C1 regression: screen_insert_lines()/screen_delete_lines() shift rows in
+ * the *model* via a memmove, but neither has a hardware counterpart the way
+ * screen_scroll() has blit_scroll_region() -- main.c's pump_conn() only calls
+ * blit_scroll_region() when scr->scroll_seq changes, and IL/DL never touch
+ * scroll_seq. Mark *migration* (moving dirty bits along with moved rows,
+ * matching what changed) is correct for screen_scroll(), but it is NOT
+ * sufficient here: a clean row that used to be clean can be moved with new
+ * (different) content and stay marked clean, since nothing else ever asked
+ * it to repaint. This test clears every row's marks first, so a passing
+ * assertion here means the moved/shifted rows were dirtied by the IL/DL call
+ * itself -- not incidentally by screen_init()'s or stamp_rows()'s own marks.
+ */
+static void test_insert_delete_lines_dirty_whole_region(void)
+{
+    screen_t s;
+    u8 r;
+
+    screen_init(&s);
+    stamp_rows(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_clear_marks(&s, r);
+    }
+    s.cy = 0;
+    s.cx = 0;
+    screen_insert_lines(&s, 1);
+    for (r = s.cy; r <= s.bot; ++r) {
+        CHECK(screen_row_dirty(&s, r) != 0);
+    }
+
+    screen_init(&s);
+    stamp_rows(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_clear_marks(&s, r);
+    }
+    s.cy = 0;
+    s.cx = 0;
+    screen_delete_lines(&s, 1);
+    for (r = s.cy; r <= s.bot; ++r) {
+        CHECK(screen_row_dirty(&s, r) != 0);
+    }
+}
+
 static void test_insert_delete_chars(void)
 {
     screen_t s;
@@ -615,6 +658,7 @@ int main(void)
     test_erase_line_modes();
     test_erase_display_modes();
     test_insert_delete_lines();
+    test_insert_delete_lines_dirty_whole_region();
     test_insert_delete_chars();
     test_set_attr_sgr();
     test_save_restore_cursor();
