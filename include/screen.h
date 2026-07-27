@@ -76,7 +76,9 @@ void screen_mark_row(screen_t *s, u8 row);
 /* Clear all dirty marks for row. */
 void screen_clear_marks(screen_t *s, u8 row);
 
-/* Non-zero if the given four-cell group of row is marked dirty. */
+/* Non-zero if the given four-cell group of row is marked dirty. Changing
+ * this bit test? See the CONSTRAINT comment at its definition (src/screen.c)
+ * -- it has an untested hand-copy in src/blit_hires.c. */
 u8 screen_group_dirty(const screen_t *s, u8 row, u8 group);
 
 /* Non-zero if any four-cell group of row is marked dirty. */

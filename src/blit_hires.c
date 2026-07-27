@@ -96,16 +96,27 @@ static void blit_row_groups(const screen_t *s, u8 row)
         u8 idx0, idx1, idx2, ev_first;
 
         /*
-         * Inlined screen_group_dirty()/render_group_bytes(): measured at
-         * ~550 T and ~975 T per call respectively under this SDCC ABI (stack-
-         * marshalled arguments/array outputs), so 20 calls of each -- one per
-         * group in a full row -- cost ~30,000 T that a full-row benchmark
-         * cannot hide. Both remain the tested source of truth: the bit test
-         * mirrors screen_group_dirty() (src/screen.c) exactly, and the fi/
-         * even-odd arithmetic mirrors render_group_bytes() (render_hires.c),
-         * whose mapping test (test_group_byte_mapping) is what actually
-         * proves this formula correct -- this is a duplicated, hot-path-only
-         * copy of an already-verified formula, not a second untested one.
+         * DUPLICATED FORMULAS -- KNOWN, MEASURED, DELIBERATE. Read this
+         * before changing screen_group_dirty() (src/screen.c) or
+         * render_group_bytes() (src/render_hires.c): this block re-implements
+         * both by hand and WILL NOT be caught by test/run.sh if you change
+         * the originals and forget this copy, because blit_hires.c uses
+         * absolute HIRES_FILE0/1 addresses and so cannot be host-compiled at
+         * all -- see the constraint note on both original definitions.
+         *
+         * Why duplicated instead of called: calling render_group_bytes()
+         * and screen_group_dirty() at GROUP granularity (once per group, 20
+         * calls/row each, not once per scanline -- that would be the 8x trap
+         * this file's header comment warns about) was tried and measured:
+         * 267,267 T -> 286,382 T for a full 20-group fast-path row, +19,115 T
+         * (~7%). That is a deterministic, reproducible cost (this emulator
+         * has no run-to-run variance), not measurement noise, so it was
+         * judged material against a row that already misses its 194,617 T
+         * reference target -- see docs/perf/benchmarks.md, "Function-call
+         * vs. inlined mapping/dirty-check" for the exact before/after and the
+         * commands that produced them. Task 9's blit_ula.c brief must know
+         * this shape is duplicated, not assume it can just call the shared
+         * functions and match this file's speed.
          */
         if (!(s->dirty[row][g >> 3] & (u8)(1u << (g & 7u)))) {
             continue;

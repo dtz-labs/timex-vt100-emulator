@@ -35,6 +35,16 @@ void screen_clear_marks(screen_t *s, u8 row)
     }
 }
 
+/*
+ * CONSTRAINT for anyone changing this bit test: src/blit_hires.c's
+ * blit_row_groups() hand-copies this exact expression inline, for measured
+ * hot-path performance (see docs/perf/benchmarks.md, "Function-call vs.
+ * inlined mapping/dirty-check"). blit_hires.c cannot be host-compiled
+ * (absolute HIRES_FILE0/1 addresses), so test/run.sh will NOT catch a
+ * divergence between that copy and this function if you change this
+ * without updating both. Grep for "DUPLICATED FORMULAS" in blit_hires.c
+ * before touching this.
+ */
 u8 screen_group_dirty(const screen_t *s, u8 row, u8 group)
 {
     return (u8)(s->dirty[row][group >> 3] & (u8)(1u << (group & 7u)));

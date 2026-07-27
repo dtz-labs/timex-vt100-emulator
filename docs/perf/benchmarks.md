@@ -166,3 +166,59 @@ over the immediately-preceding commit, and would be roughly 2.5x over the
 true pre-work baseline once the 64-vs-80-column difference is accounted
 for) -- it just does not reach the specific number the review's own
 diagnostic prototype hit.
+
+## Function-call vs. inlined mapping/dirty-check (post-review follow-up)
+
+Code review raised an Important finding: `blit_row_groups` hand-copies
+`render_group_bytes()`'s index arithmetic and `screen_group_dirty()`'s bit
+test, and `blit_hires.c` cannot be host-compiled (absolute `HIRES_FILE0`/
+`HIRES_FILE1` addresses), so `test/run.sh` can never catch that copy
+diverging from the originals -- a real risk, and one Task 9's `blit_ula.c`
+would otherwise inherit and multiply.
+
+Per the reviewer's request, tried calling both shared functions at **group
+granularity** (once per group -- 20 calls/row each -- not once per
+scanline, which would be the 8x trap `blit_row_groups`' header comment
+already warns about) instead of duplicating their formulas inline, and
+re-measured with the same harness used throughout this file:
+
+```sh
+export PATH="$HOME/Programowanie/z88dk/bin:$PATH"
+export ZCCCFG="$HOME/Programowanie/z88dk/lib/config"
+sh tools/bench.sh
+```
+
+| Variant | row_normal T-states |
+|---|---:|
+| Inlined/duplicated formulas (shipped) | 267,267 |
+| Real calls to `screen_group_dirty()` + `render_group_bytes()` (group granularity) | 286,382 |
+
+Difference: **+19,115 T, ~7.2%**. This is a deterministic, reproducible
+cost -- `z88dk-ticks` is a cycle-exact emulator with no run-to-run
+variance, so this is not measurement noise, it is the real, repeatable
+price of two extra `CALL`/`RET` pairs and stack-marshalled arguments per
+group under this SDCC ABI (consistent with the ~550 T and ~975 T per-call
+costs measured earlier in this document).
+
+**Decision: kept the inlined/duplicated formulas (267,267 T).** ~7% is a
+real, systematic cost, not noise, on a row that already misses its
+194,617 T reference target -- adding it back would widen an
+already-disclosed shortfall rather than close it, for a maintainability
+benefit (single source of truth reachable by host tests) that can instead
+be obtained by making the duplication impossible to miss:
+
+- `include/render_geom.h` and `src/render_hires.c` (`render_group_bytes`'s
+  declaration and definition) and `include/screen.h` and `src/screen.c`
+  (`screen_group_dirty`'s declaration and definition) each now carry a
+  `CONSTRAINT` comment pointing at the copy in `blit_hires.c` and warning
+  that `test/run.sh` cannot catch a divergence.
+- `blit_hires.c`'s copy is marked `DUPLICATED FORMULAS -- KNOWN, MEASURED,
+  DELIBERATE`, cites this section for the exact numbers, and states plainly
+  that Task 9's `blit_ula.c` should decide fresh whether to call the shared
+  functions or duplicate them -- it must not assume this file's shape
+  calls them, because it doesn't.
+
+If a future editor changes either formula, both `CONSTRAINT` comments and
+the `blit_hires.c` copy will be visible from the definition site, which is
+the best available safety net given `blit_hires.c` is structurally
+unreachable from the host test suite.

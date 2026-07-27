@@ -33,7 +33,16 @@ void render_row_bytes(const u8 *g, u8 *ev, u8 *od);
  *        single file), 1 for `od`. The ULA build (one file) sets file3 all 0.
  *
  * The future ULA blitter (render_ula.c) exports the same name so blit_ula.c
- * can be written in this exact shape. */
+ * can be written in this exact shape.
+ *
+ * CONSTRAINT: src/blit_hires.c's blit_row_groups() does NOT call this
+ * function -- it hand-copies the `fi`/even-odd arithmetic inline (measured
+ * hot-path performance; see docs/perf/benchmarks.md). blit_hires.c cannot be
+ * host-compiled (absolute HIRES_FILE0/1 addresses), so test/run.sh will NOT
+ * catch a divergence if you change this formula without updating that copy
+ * too. Grep for "DUPLICATED FORMULAS" in blit_hires.c. Task 9's blit_ula.c
+ * should decide fresh whether to call this or duplicate it, rather than
+ * assume blit_hires.c's shape calls it -- it doesn't. */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3);
 
 #endif /* RENDER_GEOM_H */

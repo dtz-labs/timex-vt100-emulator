@@ -76,6 +76,15 @@ void render_row_bytes(const u8 *g80, u8 *ev, u8 *od)
  * file3[k] == 0 selects the even file (ev), 1 selects the odd file (od) --
  * indices/files returned rather than pointers, so this needs no display
  * memory and is host-testable.
+ *
+ * CONSTRAINT for anyone changing this formula: src/blit_hires.c's
+ * blit_row_groups() hand-copies this exact `fi`/even-odd arithmetic inline,
+ * for measured hot-path performance (see docs/perf/benchmarks.md,
+ * "Function-call vs. inlined mapping/dirty-check"). blit_hires.c cannot be
+ * host-compiled (absolute HIRES_FILE0/1 addresses), so test/run.sh will NOT
+ * catch a divergence between that copy and this function if you change
+ * this without updating both. Grep for "DUPLICATED FORMULAS" in
+ * blit_hires.c before touching this.
  */
 void render_group_bytes(u8 g, u8 *idx3, u8 *file3)
 {
