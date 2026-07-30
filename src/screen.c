@@ -2,6 +2,59 @@
  * screen.c -- terminal cell-grid model. See screen.h.
  */
 #include "screen.h"
+#include <string.h>
+
+void screen_mark_cell(screen_t *s, u8 row, u8 col)
+{
+    u8 g = (u8)(col / DIRTY_GROUP_COLS);
+
+    s->dirty[row][g >> 3] |= (u8)(1u << (g & 7u));
+}
+
+void screen_mark_span(screen_t *s, u8 row, u8 c0, u8 c1)
+{
+    u8 g = (u8)(c0 / DIRTY_GROUP_COLS);
+    u8 last = (u8)(c1 / DIRTY_GROUP_COLS);
+
+    for (; g <= last; ++g) {
+        s->dirty[row][g >> 3] |= (u8)(1u << (g & 7u));
+    }
+}
+
+void screen_mark_row(screen_t *s, u8 row)
+{
+    screen_mark_span(s, row, 0, (u8)(COLS - 1u));
+}
+
+void screen_clear_marks(screen_t *s, u8 row)
+{
+    u8 b;
+
+    for (b = 0; b < DIRTY_BYTES; ++b) {
+        s->dirty[row][b] = 0;
+    }
+}
+
+/*
+ * Both blitters call SCREEN_GROUP_DIRTY_BIT() (screen.h) directly instead of
+ * hand-copying this test -- see that macro's comment for why a macro rather
+ * than a plain call to this function. This function is a thin wrapper over
+ * the same macro, so there is exactly one definition of the bit test.
+ */
+u8 screen_group_dirty(const screen_t *s, u8 row, u8 group)
+{
+    return SCREEN_GROUP_DIRTY_BIT(s, row, group);
+}
+
+u8 screen_row_dirty(const screen_t *s, u8 row)
+{
+    u8 b, any = 0;
+
+    for (b = 0; b < DIRTY_BYTES; ++b) {
+        any |= s->dirty[row][b];
+    }
+    return any;
+}
 
 void screen_init(screen_t *s)
 {
@@ -12,7 +65,7 @@ void screen_init(screen_t *s)
             s->cells[r][c].ch = BLANK_CH;
             s->cells[r][c].attr = 0;
         }
-        s->dirty[r] = 1;
+        screen_mark_row(s, r);
     }
     s->cx = 0;
     s->cy = 0;
@@ -38,7 +91,7 @@ void screen_putc(screen_t *s, u8 ch)
     }
     s->cells[s->cy][s->cx].ch = ch;
     s->cells[s->cy][s->cx].attr = s->attr;
-    s->dirty[s->cy] = 1;
+    screen_mark_cell(s, s->cy, s->cx);   /* mark before the cursor advances */
     if (s->cx + 1u >= COLS) {
         /* Last column: park the cursor. With autowrap, defer the wrap until the
          * next printable (VT-100). Without it, stay put and overwrite in place. */
@@ -74,8 +127,9 @@ static void blank_row(screen_t *s, int r)
 }
 
 /* Scroll an arbitrary inclusive row region [top..bot] by n (>0 up, <0 down),
- * blanking freed rows and dirtying the region. Shared by screen_scroll (the
- * whole scroll region) and IL/DL (a region starting at the cursor row). */
+ * blanking freed rows (fully dirtied) and migrating each surviving row's
+ * dirty marks along with its cells. Shared by screen_scroll (the whole scroll
+ * region) and IL/DL (a region starting at the cursor row). */
 static s8 effective_scroll_n(int top, int bot, int n)
 {
     int height = bot - top + 1;
@@ -93,7 +147,7 @@ static s8 effective_scroll_n(int top, int bot, int n)
 
 static void scroll_region(screen_t *s, int top, int bot, int n)
 {
-    int absn, r, c;
+    int absn, r;
 
     n = effective_scroll_n(top, bot, n);
     if (n == 0) {
@@ -102,27 +156,31 @@ static void scroll_region(screen_t *s, int top, int bot, int n)
     absn = (n > 0) ? n : -n;
 
     if (n > 0) {                       /* scroll up: content moves toward top */
-        for (r = top; r <= bot - absn; ++r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r + absn][c];
-            }
+        u8 keep = (u8)(bot - absn - top + 1);
+
+        if (keep != 0) {
+            memmove(&s->cells[top][0], &s->cells[top + absn][0],
+                    (size_t)keep * COLS * sizeof(cell_t));
+            memmove(&s->dirty[top][0], &s->dirty[top + absn][0],
+                    (size_t)keep * DIRTY_BYTES);
         }
         for (r = bot - absn + 1; r <= bot; ++r) {
             blank_row(s, r);
+            screen_mark_row(s, (u8)r);
         }
     } else {                           /* scroll down: content moves toward bot */
-        for (r = bot; r >= top + absn; --r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r - absn][c];
-            }
+        u8 keep = (u8)(bot - (top + absn) + 1);
+
+        if (keep != 0) {
+            memmove(&s->cells[top + absn][0], &s->cells[top][0],
+                    (size_t)keep * COLS * sizeof(cell_t));
+            memmove(&s->dirty[top + absn][0], &s->dirty[top][0],
+                    (size_t)keep * DIRTY_BYTES);
         }
         for (r = top; r <= top + absn - 1; ++r) {
             blank_row(s, r);
+            screen_mark_row(s, (u8)r);
         }
-    }
-
-    for (r = top; r <= bot; ++r) {
-        s->dirty[r] = 1;
     }
 }
 
@@ -174,7 +232,7 @@ static void blank_cells(screen_t *s, int row, int c0, int c1)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)c0, (u8)c1);
 }
 
 void screen_erase_line(screen_t *s, u8 mode)
@@ -208,20 +266,44 @@ void screen_erase_display(screen_t *s, u8 mode)
     }
 }
 
+/*
+ * IL/DL have no hardware counterpart: unlike screen_scroll(), which
+ * main.c's pump_conn() follows with blit_scroll_region() whenever
+ * scr->scroll_seq changes, screen_insert_lines()/screen_delete_lines() never
+ * touch scroll_seq, so nothing ever blits a hardware scroll for them. That
+ * makes scroll_region()'s dirty-mark *migration* (moving each surviving
+ * row's marks along with its cells, added so screen_scroll() would not
+ * re-dirty rows the hardware scroll already moved) actively wrong here: a
+ * clean row can be shifted onto a different row's content and stay marked
+ * clean, since nothing else will ever ask the software renderer to repaint
+ * it. Mark the whole moved region dirty after the move so blit_flush() -- the
+ * ONLY path that will ever put these rows on screen -- repaints every row
+ * that changed.
+ */
 void screen_insert_lines(screen_t *s, u8 n)
 {
+    u8 r;
+
     if (s->cy < s->top || s->cy > s->bot) {
         return;
     }
     scroll_region(s, s->cy, s->bot, -(int)n);    /* down: blanks at cursor row */
+    for (r = s->cy; r <= s->bot; ++r) {
+        screen_mark_row(s, r);
+    }
 }
 
 void screen_delete_lines(screen_t *s, u8 n)
 {
+    u8 r;
+
     if (s->cy < s->top || s->cy > s->bot) {
         return;
     }
     scroll_region(s, s->cy, s->bot, (int)n);     /* up: blanks at region bottom */
+    for (r = s->cy; r <= s->bot; ++r) {
+        screen_mark_row(s, r);
+    }
 }
 
 void screen_insert_chars(screen_t *s, u8 n)
@@ -240,7 +322,7 @@ void screen_insert_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)cx, (u8)(COLS - 1u));
 }
 
 void screen_delete_chars(screen_t *s, u8 n)
@@ -259,7 +341,7 @@ void screen_delete_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_mark_span(s, (u8)row, (u8)cx, (u8)(COLS - 1u));
 }
 
 void screen_set_attr(screen_t *s, u8 sgr)

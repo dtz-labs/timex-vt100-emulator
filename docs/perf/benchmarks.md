@@ -1,0 +1,576 @@
+# Renderer benchmarks
+
+T-state measurements for the hot renderer/scroll paths, produced by
+`tools/bench.sh` (harness sources in `tools/bench/`) using `z88dk-ticks`.
+CI prints these; it does not enforce them -- a regression threshold would
+need a pinned compiler image, and `.github/workflows/ci.yml` uses
+`z88dk/z88dk:latest`.
+
+Numbers are **only comparable within one z88dk build**. The compiler version
+is recorded with every row below.
+
+## How these are measured
+
+Each harness (`tools/bench/bench_<path>.c`) links the real project sources
+(`screen.c`, `render.c`, `render_hires.c`, `blit_hires.c`, `hires.c`,
+`font.c`) and drives ONE public entry point from a known state, bracketed by
+`bench_mark_a()` / `bench_mark_b()` (`tools/bench/bench_common.c`, a
+separate translation unit so the calls cannot be inlined away).
+`z88dk-ticks` resets its cycle counter the instant PC reaches
+`bench_mark_a`'s entry and stops it the instant PC reaches `bench_mark_b`'s
+entry, so the printed number is the T-states strictly between those two
+calls, plus a small fixed overhead (`bench_mark_a`'s own body plus the
+`CALL` that enters `bench_mark_b`, on the order of 40 T) -- negligible
+against the paths measured here.
+
+**z88dk-ticks argument order matters.** `z88dk-ticks` parses arguments left
+to right and loads `<input_file>` the instant it reaches the (flag-less)
+filename token, using whatever `load_address` (`-l`) it has parsed *so
+far*. Putting the filename before `-l` loads the file at address 0 while
+`-pc`/`-l` still tells the CPU to start executing at `$8000` -- a silent
+walk through unrelated/zero memory that still happens to cross the
+`-start`/`-end` label addresses in the right order, producing a
+plausible-looking but completely meaningless number (confirmed by tracing:
+it exactly matches a NOP-count between the two addresses). `tools/bench.sh`
+puts every flag, including `-l`, before the filename. This cost real time to
+find -- an earlier draft of this script had it backwards and reported
+numbers around 24-131,072 T for every path, suspiciously round and
+identical across totally different code.
+
+Rows:
+
+- `row_normal` -- `blit_flush()` with one dirty row, 80 cells, `attr == 0`.
+- `row_attrs` -- same, but every cell carries `ATTR_REVERSE` (forces the
+  slow fallback for all 20 groups).
+- `row_blank` -- one dirty row, fully blank (space, `attr == 0`).
+- `scroll_model` -- `screen_scroll()` over the full 24-row region, filled.
+- `scroll_vram` -- `blit_scroll_region()` over the full 24-row region.
+
+## Reference: the performance review's own numbers (true pre-work baseline)
+
+**Commit:** `7323852` ("ZX Spectrum 40-column target: design, plans, and
+project rename" -- the commit that added
+`docs/superpowers/reviews/2026-07-26-perf-review.md`, before any of Tasks
+1-9 existed; the 80-column renderer was still only a plan at this point).
+**Compiler:** `zcc +zx -SO3 -clib=sdcc_iy` (exact z88dk build/version not
+recorded in the review).
+
+| Path | Measured | Diagnostic variant (inlined) |
+|---|---:|---:|
+| One normal dirty row, 64 columns (old renderer) | 176,039 T | 76,055 T |
+| Screen-model scroll | 449,787 T | 67,609 T |
+| Video-RAM scroll | 682,052 T | 345,464 T |
+| Planned 80-column row (not yet implemented) | 670,861 T | 194,617 T |
+
+This is the number this task's brief points at (194,617 T) as the "near"
+target for a normal 80-column row. It comes from a diagnostic prototype the
+review built, not from the codebase as it exists after Tasks 1-4 -- see the
+"before" row below for that.
+
+## Before (this task's own baseline, at the commit prior to its change)
+
+**Commit:** `da2ac39` (end of Task 4: "main: toggle the cursor with XOR
+instead of dirtying its rows" -- the last commit before this task's
+`blit_flush` rewrite; Tasks 1-4's dirty-group tracking, memmove scroll, and
+exact-cursor-toggle are already in place, but `blit_flush` still repaints
+whole rows unconditionally).
+**Compiler:** `zcc - Frontend for the z88dk Cross-C Compiler -
+v23854-4d530b6eb7-20251002`.
+
+| Path | T-states |
+|---|---:|
+| row_normal | 600,728 |
+| row_attrs | 609,688 |
+| row_blank | 600,728 |
+| scroll_model | 101,533 |
+| scroll_vram | 680,099 |
+
+`row_blank` equals `row_normal` exactly: the pre-Task-5 `blit_flush` has no
+blank-row fast path, so a fully blank row costs the same as a fully
+populated one -- both go through the same whole-row `render_row_fast()`
+regardless of content. This is expected, and it is exactly what Task 5
+removes.
+
+## After (this task: dirty-group rendering, inline `attr==0` path, blank-row fast path)
+
+**Commit:** see the commit this file is checked in with (`blit: render only
+dirty groups, with normal and blank fast paths`).
+**Compiler:** `zcc - Frontend for the z88dk Cross-C Compiler -
+v23854-4d530b6eb7-20251002` (same build as "before", for a fair comparison).
+
+| Path | T-states | vs. before | vs. review's diagnostic target |
+|---|---:|---:|---:|
+| row_normal | 267,267 | 2.25x faster | 1.37x slower than 194,617 |
+| row_attrs | 549,093 | 1.11x faster | -- |
+| row_blank | 40,198 | 14.9x faster | -- |
+| scroll_model | 101,508 | unchanged (not touched by this task) | -- |
+| scroll_vram | 680,099 | unchanged (not touched by this task) | -- |
+
+`scroll_model` and `scroll_vram` are included for completeness (this
+harness benchmarks the same code Tasks 3/4 already optimised) and, as
+expected, come back essentially identical to "before" -- neither path is
+touched by this task, which is a useful sanity check that nothing regressed
+elsewhere.
+
+### The `row_normal` gap: investigated, not silently accepted
+
+**`row_normal` did not land near the review's 194,617 T target.** Per the
+brief's explicit instruction ("If it does not, stop and investigate rather
+than proceeding"), this was investigated rather than reported as a plain
+success:
+
+1. **First implementation measured 318,554 T** (worse than the eventual
+   number below). Investigation found a real bug: `row_scanline_offset()`
+   and `font_glyph()` were being recomputed *inside the per-group loop*,
+   once per scanline -- 160 calls each for a 20-group row instead of 8 (for
+   the scanline-offset table, shared by every group) and 80 (for the glyph
+   lookups, 4 per group). Hoisting both to run once per row (offsets) or
+   once per group (glyphs) dropped the number to 276,448 T.
+2. Two further C-level restructurings were tried and measured:
+   scalar locals instead of small arrays for the group's destination
+   indices (276,448 -> 278,168 T, no real change), and walking pointers
+   instead of array indexing for the per-scanline glyph/offset reads
+   (278,168 -> 286,382 T, slightly worse -- reverted in spirit, kept for
+   the offsets since it was harmless there).
+3. Isolated microbenchmarks of the two *new* per-group helpers this task
+   introduces (`tools/bench` ad hoc, not part of the committed harness)
+   found real, substantial SDCC-ABI call overhead: `screen_group_dirty()`
+   ~550 T/call, `render_group_bytes()` ~975 T/call, `font_glyph()` ~370
+   T/call -- all far higher than a hand-written Z80 equivalent, an
+   inherent characteristic of this compiler's stack-marshalled calling
+   convention for small functions, not a logic bug. Inlining
+   `screen_group_dirty`'s bit test and `render_group_bytes`'s index
+   arithmetic directly into `blit_row_groups` (documented as a deliberate,
+   tested-formula duplication -- both remain defined and host-tested
+   elsewhere) recovered another ~19,000 T, landing at the reported
+   267,267 T.
+
+**Conclusion:** the remaining ~73,000 T gap to 194,617 T is attributed to
+SDCC's (`zsdcc`, selected by `-clib=sdcc_iy`) code generation quality for
+this kind of pointer/bitfield-heavy C on Z80 -- confirmed by direct
+disassembly of the generated `blit_row_groups` code, which repeatedly
+reloads values through `IX`-relative stack addressing rather than keeping
+them in registers across the 8-scanline inner loop, and by the measured
+per-call costs above. Further C-source restructuring did not close it in
+three attempts. The review itself names the fallback for exactly this
+situation: "An assembly normal path if the C implementation still misses
+the target" (`docs/superpowers/reviews/2026-07-26-perf-review.md`,
+recommended-order item 7). This task does not implement that assembly path
+-- it is out of scope for a C-level task and is flagged for whoever picks
+up performance work next.
+
+The **shape** of the change (group loop, attr==0 inline path with no helper
+calls or temporary arrays inside the scanline loop, blank-row block clear)
+matches the brief exactly, and it is a genuine, large improvement (2.25x
+over the immediately-preceding commit, and would be roughly 2.5x over the
+true pre-work baseline once the 64-vs-80-column difference is accounted
+for) -- it just does not reach the specific number the review's own
+diagnostic prototype hit.
+
+## Function-call vs. inlined mapping/dirty-check (post-review follow-up)
+
+Code review raised an Important finding: `blit_row_groups` hand-copies
+`render_group_bytes()`'s index arithmetic and `screen_group_dirty()`'s bit
+test, and `blit_hires.c` cannot be host-compiled (absolute `HIRES_FILE0`/
+`HIRES_FILE1` addresses), so `test/run.sh` can never catch that copy
+diverging from the originals -- a real risk, and one Task 9's `blit_ula.c`
+would otherwise inherit and multiply.
+
+Per the reviewer's request, tried calling both shared functions at **group
+granularity** (once per group -- 20 calls/row each -- not once per
+scanline, which would be the 8x trap `blit_row_groups`' header comment
+already warns about) instead of duplicating their formulas inline, and
+re-measured with the same harness used throughout this file:
+
+```sh
+export PATH="$HOME/Programowanie/z88dk/bin:$PATH"
+export ZCCCFG="$HOME/Programowanie/z88dk/lib/config"
+sh tools/bench.sh
+```
+
+| Variant | row_normal T-states |
+|---|---:|
+| Inlined/duplicated formulas (shipped) | 267,267 |
+| Real calls to `screen_group_dirty()` + `render_group_bytes()` (group granularity) | 286,382 |
+
+Difference: **+19,115 T, ~7.2%**. This is a deterministic, reproducible
+cost -- `z88dk-ticks` is a cycle-exact emulator with no run-to-run
+variance, so this is not measurement noise, it is the real, repeatable
+price of two extra `CALL`/`RET` pairs and stack-marshalled arguments per
+group under this SDCC ABI (consistent with the ~550 T and ~975 T per-call
+costs measured earlier in this document).
+
+**Decision: kept the inlined/duplicated formulas (267,267 T).** ~7% is a
+real, systematic cost, not noise, on a row that already misses its
+194,617 T reference target -- adding it back would widen an
+already-disclosed shortfall rather than close it, for a maintainability
+benefit (single source of truth reachable by host tests) that can instead
+be obtained by making the duplication impossible to miss:
+
+- `include/render_geom.h` and `src/render_hires.c` (`render_group_bytes`'s
+  declaration and definition) and `include/screen.h` and `src/screen.c`
+  (`screen_group_dirty`'s declaration and definition) each now carry a
+  `CONSTRAINT` comment pointing at the copy in `blit_hires.c` and warning
+  that `test/run.sh` cannot catch a divergence.
+- `blit_hires.c`'s copy is marked `DUPLICATED FORMULAS -- KNOWN, MEASURED,
+  DELIBERATE`, cites this section for the exact numbers, and states plainly
+  that Task 9's `blit_ula.c` should decide fresh whether to call the shared
+  functions or duplicate them -- it must not assume this file's shape
+  calls them, because it doesn't.
+
+If a future editor changes either formula, both `CONSTRAINT` comments and
+the `blit_hires.c` copy will be visible from the definition site, which is
+the best available safety net given `blit_hires.c` is structurally
+unreachable from the host test suite.
+
+## Task 9: moving `row_scanline_offset` out of `blit_hires.c`
+
+Task 9 moved the row-scanline "thirds" offset formula (previously a
+`blit_hires.c`-local `static` function) into `src/hires.c`
+(`hires_row_scanline_offset()`) and `src/ula.c` (`ula_row_scanline_offset()`)
+as pure, host-tested functions (`test/test_hires.c`, `test/test_ula.c`), so
+`src/blit_ula.c` would have one readable, tested source for the identical ZX
+"thirds" interleave instead of a third hand-copy. `blit_hires.c`'s
+`blit_row_groups()`/`blit_row_clear()` were updated to call
+`hires_row_scanline_offset()` instead of keeping their own copy.
+
+This is a call, not a duplication, so it was re-measured with
+`tools/bench.sh` (same harness, same compiler, `zcc ... v23854-4d530b6eb7-...`)
+to check the "call vs. duplicate" question was not silently decided by
+inertia:
+
+| Path | Before (local `static`) | After (calls `hires_row_scanline_offset()`) | Delta |
+|---|---:|---:|---:|
+| row_normal | 267,267 | 268,283 | +1,016 T (+0.38%) |
+| row_attrs | 549,093 | 550,109 | +1,016 T (+0.19%) |
+| row_blank | 40,198 | 41,214 | +1,016 T (+2.5%) |
+| scroll_model | 101,508 | 101,533 | +25 T (noise; `scroll_model` calls only `screen_scroll()`, which never touches this formula) |
+| **scroll_vram** | **680,099** | **775,603** | **+95,504 T (+14.0%)** |
+
+`blit_row_groups()`/`blit_row_clear()` call the shared function at most 8
+times per row (the offsets are precomputed once, before the group loop --
+see this file's earlier sections), so the row paths' ~1,016 T cost is the
+same small, disclosed, per-call price as everywhere else in this document
+and was accepted.
+
+`scroll_vram` (`blit_scroll_region()` over the full 24-row region) is a
+different story: `scroll_file_up_one()`/`scroll_file_down_one()` call the
+offset formula up to 2x per `(row, scanline)` pair, x2 display files, over a
+23-row region -- roughly 750 calls for one `blit_scroll_region()` call. A
+plain move of the call site, taken at face value, would have silently
+regressed a path Tasks 3/4 already spent effort optimising (680,099 T, see
+"Before"/"After" tables above) by 14% -- an unrelated build-matrix task
+quietly undoing prior optimisation work.
+
+**Decision: reverted the scroll primitives to a local, duplicated formula**
+(`scroll_scanline_offset()`, marked `DUPLICATED FORMULA -- KNOWN, MEASURED,
+DELIBERATE` in `src/blit_hires.c`, cross-referencing
+`hires_row_scanline_offset()`), recovering `scroll_vram` to exactly 680,099 T
+(confirmed by rerunning `tools/bench.sh` after the revert -- see the numbers
+in the "current" run below). The row-groups call sites keep calling the
+shared, host-tested function; only the scroll loop -- the one call site
+where the per-call cost multiplies into a double-digit percentage -- keeps
+its own copy.
+
+Current (`tools/bench.sh`, same compiler build, after the scroll-path revert):
+
+| Path | T-states |
+|---|---:|
+| row_normal | 268,283 |
+| row_attrs | 550,109 |
+| row_blank | 41,214 |
+| scroll_model | 101,533 |
+| scroll_vram | 680,099 |
+
+## ULA blitter: duplicate vs. call (Task 9)
+
+`src/blit_ula.c`'s `blit_row_groups()` needed the same decision
+`blit_hires.c` made in the section above, but the brief explicitly asked for
+it to be decided fresh rather than assumed: the ULA mapping is materially
+simpler (three consecutive bytes in one display file, no even/odd branch),
+so calling `screen_group_dirty()` + `render_group_bytes()` (src/render_ula.c)
+at group granularity might plausibly have been cheap enough to keep as the
+single source of truth.
+
+Measured with an ad hoc `z88dk-ticks` harness mirroring
+`tools/bench/bench_row_normal.c` (one dirty row, 40 cells, `attr == 0`,
+`-DTERM_ZX`), comparing two full implementations of `blit_ula.c`: one with
+the group-index arithmetic (`idx0 = 1 + 3*g`) and the dirty-bit test
+hand-duplicated inline (mirroring `blit_hires.c`'s shape), one calling
+`screen_group_dirty()` + `render_group_bytes()` once per group (10
+groups/row for the 40-column build):
+
+| Variant | row_normal T-states (40-column build) |
+|---|---:|
+| Inlined/duplicated formulas (shipped) | 130,730 |
+| Real calls to `screen_group_dirty()` + `render_group_bytes()` (group granularity) | 143,181 |
+
+Difference: **+12,451 T, ~9.5%**. Same deterministic-cost conclusion as the
+Timex measurement above (there +19,115 T/~7.2% over 20 groups; here +12,451
+T/~9.5% over 10 groups -- consistent with the same per-call SDCC-ABI
+overhead applied to half as many groups, landing a comparable percentage
+because the base row cost is also roughly halved at 40 columns).
+
+**Decision: kept the inlined/duplicated formulas (130,730 T)**, for the same
+reasoning as `blit_hires.c`: ~9.5% is a real, systematic, reproducible cost
+(this emulator has zero run-to-run variance), not something to trade away for
+a maintainability benefit that is instead obtained by making the duplication
+impossible to miss -- `src/render_ula.c` (`render_group_bytes`) and
+`include/render_geom.h` now carry `CONSTRAINT` comments pointing at
+`src/blit_ula.c`'s copy (mirroring the existing `blit_hires.c` ones), and
+`include/screen.h`/`src/screen.c` (`screen_group_dirty`) now name both
+`blit_hires.c` and `blit_ula.c` as hand-copies. Grep for "DUPLICATED
+FORMULAS" in `src/blit_ula.c`.
+
+The measurement harness (two full `blit_ula.c` variants plus a
+`bench_row_normal_zx.c` mirroring `tools/bench/bench_row_normal.c`) was ad
+hoc, not committed to `tools/bench/` -- the same precedent as the
+"Function-call vs. inlined mapping/dirty-check" section above, which used an
+uncommitted `tools/bench` harness for its own isolated per-call
+microbenchmarks.
+
+## Task 10: image-size estimate vs. measured (not a T-state benchmark)
+
+A different metric from everything else in this file -- `check_image_limit.py`
+margin (bytes of ROM free before the IM2 vector table), not T-states -- but
+recorded here because it is the same kind of "estimate vs. measured, and what
+we did about the gap" data this file otherwise tracks, and a future reader
+comparing the task's estimate to reality should find the correction rather
+than the estimate.
+
+Task 10's brief estimated replacing the startup banner's two `'q'`-run string
+literals with a `COLS - 2` loop would free "roughly 400 bytes" (162 bytes of
+literal were actually removed). Measured on all four TAPs, both rewrites of
+`src/main.c`'s `demo_stream` **grew** the image instead:
+
+| Change | `build/term.tap` margin | vs. previous |
+|---|---:|---:|
+| Baseline (before Task 10) | 2514 | -- |
+| Rules only (`feed_hrule()`, single-array + sentinel-byte design) | 2464 | -50 |
+| Whole banner (`feed_hrule()` + `feed_row()`, SO/SI charset fix, shortened content) | 2214 | -250 more (-300 total) |
+
+Both regressions come from the same source: SDCC's per-call/per-branch
+overhead under `-clib=sdcc_iy` exceeds the literal bytes removed, for
+functions this small (consistent with the per-call costs measured elsewhere
+in this file, e.g. `screen_group_dirty()` ~550 T/call, `render_group_bytes()`
+~975 T/call -- a cycle cost, not a size one, but the same underlying
+"function calls are not free on this ABI" fact). The whole-banner rewrite
+adds one more function (`feed_row()`) and a cursor-position-driven padding
+loop, so the size cost compounds rather than cancels.
+
+All four TAPs still build and pass `check-image-limit` with ample margin
+(2214-4905 bytes, at the point this task's own measurement was taken) -- this
+is a correction to a size estimate, not a build failure. No further size
+optimization was attempted: the functional correctness goal (box closes flush
+and no line wraps, at both 40 and 80 columns) was the point of the task, and
+the margin is nowhere near the gate.
+
+**This range is itself now stale** -- every later task that touches
+`src/main.c`, `screen.c`, or the blitters moves these margins again, in either
+direction. Treat the table above as a point-in-time measurement of Task 10's
+own change, not a current fact. **"Fix wave: memory-map refresh" below is the
+one table in this file meant to be kept current** as of the most recent code
+change; `docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md` §8
+points here rather than re-stating the numbers for exactly this reason.
+
+## Fix wave (2026-07-27): memory-map refresh
+
+A whole-branch review found `docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md`
+§8's memory map stale by about 1,800 bytes against the map files on disk at
+the time of the review (`term.map` `0xE55A`/2,214; `term-if1.map` `0xE451`;
+`term-zx.map` `0xDAD7`; `term-zx-if1.map` `0xD9CE`). Fixing the review's other
+findings in the same pass (C1's dirty-mark fix in `screen.c`/`main.c`, the
+shortened startup banner, and I5's macro/inline collapse below) moved the
+image end again, in both directions, before this file could even be updated
+-- underscoring why §8 now points here instead of hosting its own copy.
+Measured immediately after all of this fix wave's code changes landed
+(`make release-build`, reading each TAP's own `check_image_limit.py` output):
+
+| TAP | Image ends (`__BSS_END_tail`) | Margin to `0xEE00` |
+|---|---:|---:|
+| `build/term.tap` | `0xE681` | 1,919 bytes |
+| `build/term-if1.tap` | `0xE578` | 2,184 bytes |
+| `build/term-zx.tap` | `0xDBD4` | 4,652 bytes |
+| `build/term-zx-if1.tap` | `0xDACB` | 4,917 bytes |
+
+All four still pass `check-image-limit` (`make ci`, `make tap`/`make if1`/
+`make tap-zx`/`make if1-zx`) with margin to spare, though the Timex builds'
+margin (1,919 / 2,184 bytes) is visibly the tighter of the two geometries --
+worth remembering for whoever next adds a feature that grows `screen_init()`,
+`main.c`, or the shared blit path, since the ZX builds have roughly 2.5x the
+headroom.
+
+## Task 11: the 40-column row, measured against the design's extrapolation
+
+`docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md` §7 commits
+to confirming its own extrapolation: "A 40-column row is roughly half the
+work of an 80-column row" (that specific sentence extrapolates from the
+review's PRE-Task-5 670,861 T baseline to "~335,000 T (~96 ms) per row ...
+if the ULA blitter simply mirrors the current hi-res one" -- which is
+exactly what D24/milestone 7 argue against doing, and Task 9 did not do).
+This task's brief instead asks for the halving check against the row this
+project actually shipped: the current, post-Task-5/9 80-column
+`row_normal` figure (267,267 T in the brief's own text; 268,283 T in this
+file's own "Current" table above, after Task 9's row_scanline_offset call --
+a 0.4% difference, immaterial here).
+
+`tools/bench.sh` was extended (Task 11) to measure BOTH geometries in one
+run, in its own committed harness (mirroring `test/run.sh`'s existing
+two-pass convention) instead of the ad hoc, uncommitted harness the
+"ULA blitter: duplicate vs. call (Task 9)" section above used:
+
+```sh
+export PATH="$HOME/Programowanie/z88dk/bin:$PATH"
+export ZCCCFG="$HOME/Programowanie/z88dk/lib/config"
+sh tools/bench.sh
+```
+
+| Path | Timex (80 col) | ZX (40 col) |
+|---|---:|---:|
+| row_normal | 268,283 | **130,748** |
+| row_attrs | 550,109 | 274,710 |
+| row_blank | 41,214 | 28,127 |
+| scroll_model | 101,533 | 53,808 |
+| scroll_vram | 680,099 | 327,243 |
+
+**The measured 40-column `row_normal` is 130,748 T.** Half of the 80-column
+figure is 134,141.5 T (using this file's own 268,283) or 133,633.5 T (using
+the brief's 267,267). The measurement is **2.5% below** the first and **2.2%
+below** the second -- well inside the brief's ~20% tolerance either way.
+
+**Conclusion: the halving extrapolation is confirmed, not wrong.** No
+"which direction it was wrong" correction is needed in the spec, because it
+was not wrong -- but the spec's own text describes a *different*,
+already-superseded extrapolation (670,861 / 2, from writing the ULA blitter
+as a naive copy of the pre-Task-5 hi-res path) and explicitly says that
+number "must be confirmed by the benchmark" once the real one exists. That
+part of the spec has been updated (see the design spec's own diff) to
+record the real, measured figure and note that it validates "roughly half"
+as a rule of thumb for this renderer shape, even though the specific
+historical number in that sentence was for a blitter this project never
+shipped.
+
+This also cross-checks the ad hoc, uncommitted measurement already recorded
+above under "ULA blitter: duplicate vs. call (Task 9)" (130,730 T for the
+shipped, duplicated-formula `blit_ula.c`): 130,748 T here vs. 130,730 T
+there is an 18 T difference (0.01%), consistent with the two harnesses
+measuring the same code through very slightly different call paths (this
+one calls the real `blit_flush()` entry point, as `bench_row_normal.c`'s own
+header comment explains, so it includes the 23 cheap "already clean" row
+checks a real call does; Task 9's ad hoc harness measured a narrower slice).
+Two independent measurements agreeing to 0.01% is strong confirmation this
+number is real, not noise -- `z88dk-ticks` has zero run-to-run variance
+regardless, but the cross-check also rules out a harness-construction bug.
+
+Verified inside the actual CI container image (not just the local z88dk
+build used everywhere else in this file), to confirm `make bench` behaves
+identically where `.github/workflows/ci.yml` actually runs it:
+
+```
+$ docker run --rm -v "$PWD":/src -w /src z88dk/z88dk:latest make bench
+compiler: zcc ... v1-fe33ce01-20260726
+--- geometry: -DTERM_TIMEX ---
+row_normal     268283   row_attrs  550109   row_blank  41214
+scroll_model   101533   scroll_vram 680099
+--- geometry: -DTERM_ZX ---
+row_normal     130748   row_attrs  274710   row_blank  28127
+scroll_model   53808    scroll_vram 327243
+```
+
+## I5 (fix wave 2026-07-27): macro/inline vs. hand-duplicated formulas
+
+A whole-branch review pointed out that every measurement above justifying
+duplication ("Function-call vs. inlined mapping/dirty-check", "ULA blitter:
+duplicate vs. call (Task 9)", "Task 9: moving row_scanline_offset out of
+blit_hires.c") only ever compared **duplicated inline code** against a
+**real cross-translation-unit function call** -- the third option, a
+`static inline` function or macro defined once in a shared header (which
+SDCC can emit with no `CALL` at all), was never tried. Both blitters
+hand-copy `render_group_bytes()`'s index arithmetic and
+`screen_group_dirty()`'s bit test, and the scroll path in both hand-copies
+the "thirds" formula -- three permanent, untested duplications the reviewer
+asked to be re-measured against this third option before accepting them as
+permanent.
+
+**Change made, to try it:**
+
+- `SCREEN_GROUP_DIRTY_BIT(s, row, group)` -- `include/screen.h`, a macro.
+  `screen_group_dirty()` (`src/screen.c`) is now a one-line wrapper around it;
+  both `blit_hires.c` and `blit_ula.c` call the macro directly instead of
+  hand-copying the bit test.
+- `RENDER_GROUP_BYTES_INLINE(g, idx0, idx1, idx2, file0, file1, file2)` --
+  `include/render_geom.h`, a macro, geometry-selected by the same
+  `TERM_TIMEX`/`TERM_ZX` defines every other geometry header already switches
+  on. `render_group_bytes()` (`src/render_hires.c`/`src/render_ula.c`) is
+  unchanged (still the host-tested, function-call form `test_render.c`
+  exercises); the macro is the same formula, single-sourced next to that
+  function's declaration, for the one call site where a real `CALL` was
+  measured too expensive.
+- `HIRES_THIRDS_OFFSET(prow)` / `ULA_THIRDS_OFFSET(prow)` -- `include/hires.h`
+  / `include/ula.h`, macros. `hires_addr()`/`hires_row_scanline_offset()`
+  (`src/hires.c`) and `ula_addr()`/`ula_row_scanline_offset()` (`src/ula.c`)
+  now call these macros instead of a local `static` helper function; the
+  scroll primitives in both blitters (`scroll_file_up_one`/`down_one`,
+  `scroll_up_one`/`down_one`) now use the macro directly at each of their
+  ~750 (hi-res) / ~370 (ULA) call sites per `blit_scroll_region()`, instead of
+  keeping a private hand-copy of the same bit arithmetic.
+
+Chose macros over `static inline` functions throughout: SDCC/zsdcc's
+`inline` support is not assumed to guarantee no `CALL` is emitted (unlike a
+macro, which cannot possibly emit one), and the whole point of this
+re-measurement was to not assume anything about SDCC's code generation that
+wasn't directly tested.
+
+**Re-measured with `tools/bench.sh`** (same harness and compiler build used
+throughout this file, `zcc ... v23854-4d530b6eb7-20251002`), comparing the
+shipped hand-duplicated formulas (the "before" figures already recorded
+above in this file, re-confirmed with a fresh run before making any change)
+against the macro/inline versions:
+
+| Path | Timex before | Timex after | Delta | ZX before | ZX after | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| row_normal | 268,229 | 268,717 | +488 (+0.18%) | 130,766 | 129,732 | -1,034 (-0.79%) |
+| row_attrs | 550,109 | 550,543 | +434 (+0.08%) | 274,710 | 273,694 | -1,016 (-0.37%) |
+| row_blank | 41,214 | 40,198 | -1,016 (-2.5%) | 28,127 | 27,111 | -1,016 (-3.6%) |
+| scroll_model | 101,533 | 101,533 | 0 (unchanged -- this path never touches these formulas) | 53,783 | 53,808 | +25 (noise) |
+| **scroll_vram** | **680,099** | **565,037** | **-115,062 (-16.9%)** | **327,243** | **265,581** | **-61,662 (-18.8%)** |
+
+("Before" here is this branch's own state immediately after C1's dirty-mark
+fix and the startup-banner shortening, both landed earlier in this same fix
+wave -- not the historical Task 9/11 numbers quoted elsewhere in this file,
+which predate those changes by a small, disclosed amount; `row_normal`
+268,229 vs. 268,283 and 130,766 vs. 130,748 elsewhere in this file are that
+difference, not a discrepancy in this measurement.)
+
+Re-ran `tools/bench.sh` a second time with no code changes between runs:
+identical to the T-state, confirming `z88dk-ticks`' documented zero
+run-to-run variance still holds for this measurement.
+
+**Decision: took the macro/inline collapse.** `row_normal`/`row_attrs` land
+within about 1,000 T either way -- noise-level, not a systematic cost, unlike
+every previous "call vs. duplicate" measurement in this file. `row_blank` and
+especially `scroll_vram` **improved**, on both geometries: expressing the
+offset formula as a macro at the scroll path's ~750/~370 call sites removes
+the `CALL`/`RET` and stack-marshalled argument overhead entirely, rather than
+merely avoiding the +14%/+95,504 T regression a real function call caused
+there (see "Task 9: moving row_scanline_offset out of blit_hires.c" above).
+This collapses four permanent, untestable hand-copies (the dirty-bit test and
+group-to-byte arithmetic in both blitters, plus the "thirds" formula's
+scroll-path copy in both) into one macro definition each, reachable from --
+and exercised by -- the same host tests that already cover
+`screen_group_dirty()`, `render_group_bytes()`, and
+`hires_row_scanline_offset()`/`ula_row_scanline_offset()`.
+
+The `CONSTRAINT` comments at each formula's original definition
+(`include/screen.h`, `include/render_geom.h`, `include/hires.h`,
+`include/ula.h`) and the blitters' own comments have been updated to point at
+the macros instead of describing a hand-copy that no longer exists; the
+"DUPLICATED FORMULAS -- KNOWN, MEASURED, DELIBERATE" banner comments are
+removed since there is no longer a duplicate to warn about.
+
+Despite a different z88dk build (`v1-fe33ce01-20260726` vs. the local
+`v23854-4d530b6eb7-20251002` used everywhere else in this file), every
+number is bit-for-bit identical -- code generation for this source is
+stable across these two builds, which is a useful (if incidental) data
+point for how much CI's use of `z88dk/z88dk:latest` can be expected to move
+these numbers between runs.

@@ -979,320 +979,132 @@ enforce them: a threshold would need a pinned compiler image."
 
 ---
 
-### Task 6: The machine classifier
+### Task 6: The wrong-machine guard
 
-The port probes cannot run on the host, but the decision table can. Extracting it
-is what makes detection testable at all.
+**Scope reduced mid-plan, deliberately.** This task originally spanned Tasks 6
+and 7: a full four-machine classifier (`machine_classify` over three port
+probes, `machine_class.c`, sixteen host tests) plus a guard and a measured
+banner name. With two TAPs selected at compile time, detection no longer
+chooses anything — the Makefile does. The two AY probes existed solely to print
+a nicer machine name, changed no pixel, and one of the machines they
+distinguished (TS2068) cannot load a Spectrum-format TAP at all. They are cut.
+
+**There is no Task 7.** The numbering is left with a gap rather than shifting
+Tasks 8-11, which are already referenced by the progress ledger and by briefs
+already issued.
+
+What survives is the part that earns its bytes: a single SCLD probe used as a
+wrong-machine guard. The Timex build writes half its pixels to `0x6000`, which a
+plain Spectrum's ULA does not display, so running it there produces an
+unreadable half-image with no hint as to why — and on real hardware a tape load
+costs minutes before you see it. The reverse needs no guard: a Timex boots in
+Spectrum-compatible ULA mode, so the ZX TAP runs correctly on both families.
 
 **Files:**
-- Create: `include/machine.h`, `src/machine_class.c`, `test/test_machine_class.c`
-- Modify: `test/run.sh`, `Makefile`
+- Create: `include/machine.h`, `src/machine.c`
+- Modify: `src/main.c`, `Makefile`
 
 **Interfaces:**
-- Consumes: nothing.
+- Consumes: nothing from earlier tasks.
 - Produces:
   ```c
-  #define MACHINE_ZX48 0u
-  #define MACHINE_ZX128 1u
-  #define MACHINE_TC2048 2u
-  #define MACHINE_TS2068 3u
-  u8 machine_classify(u8 scld, u8 ay_timex, u8 ay_zx);
-  const char *machine_name(u8 machine);
-  u8 machine_class_has_scld(u8 machine);
+  u8 machine_has_scld(void);        /* probes port 0xFF once, caches */
+  u8 machine_caps_shift_held(void); /* keyboard half-row 0xFEFE, bit 0, active low */
   ```
+  Both are target-only hardware and are never compiled on the host.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the probe**
 
-Create `test/test_machine_class.c`:
-
-```c
-/*
- * Host tests for the machine decision table. The port probes themselves are
- * hardware and are verified in ZEsarUX; this covers the logic that turns three
- * probe results into a machine identity, including the combinations the
- * hardware cannot actually produce.
- */
-#include "machine.h"
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
-
-static int checks;
-#define CHECK(c) do { assert(c); ++checks; } while (0)
-
-static void test_table(void)
-{
-    /* Timex family: the Timex-port AY is what separates 2068 from 2048. */
-    CHECK(machine_classify(1, 1, 0) == MACHINE_TS2068);
-    CHECK(machine_classify(1, 1, 1) == MACHINE_TS2068);
-    CHECK(machine_classify(1, 0, 1) == MACHINE_TC2048);  /* AY expansion */
-    CHECK(machine_classify(1, 0, 0) == MACHINE_TC2048);
-
-    /* Sinclair family: ay_timex is never probed, so it must not matter. */
-    CHECK(machine_classify(0, 0, 1) == MACHINE_ZX128);
-    CHECK(machine_classify(0, 1, 1) == MACHINE_ZX128);
-    CHECK(machine_classify(0, 0, 0) == MACHINE_ZX48);
-    CHECK(machine_classify(0, 1, 0) == MACHINE_ZX48);
-}
-
-static void test_scld_class(void)
-{
-    CHECK(machine_class_has_scld(MACHINE_TC2048));
-    CHECK(machine_class_has_scld(MACHINE_TS2068));
-    CHECK(!machine_class_has_scld(MACHINE_ZX48));
-    CHECK(!machine_class_has_scld(MACHINE_ZX128));
-}
-
-static void test_names(void)
-{
-    CHECK(strcmp(machine_name(MACHINE_ZX48), "ZX48") == 0);
-    CHECK(strcmp(machine_name(MACHINE_ZX128), "ZX128") == 0);
-    CHECK(strcmp(machine_name(MACHINE_TC2048), "TC2048") == 0);
-    CHECK(strcmp(machine_name(MACHINE_TS2068), "TS2068") == 0);
-    /* An out-of-range value must not index past the table. */
-    CHECK(strcmp(machine_name(99), "?") == 0);
-}
-
-int main(void)
-{
-    test_table();
-    test_scld_class();
-    test_names();
-    printf("test_machine_class: %d checks passed\n", checks);
-    return 0;
-}
-```
-
-- [ ] **Step 2: Run to verify it fails**
-
-Add to `test/run.sh`:
-
-```sh
-$CC $CFLAGS $TERM_DEF "$ROOT/test/test_machine_class.c" "$ROOT/src/machine_class.c" \
-    -o "$OUT/test_machine_class"
-"$OUT/test_machine_class"
-```
-
-Run `make test`. Expected: `fatal error: 'machine.h' file not found`.
-
-- [ ] **Step 3: Implement**
-
-Create `include/machine.h` with the constants, the three prototypes, and a
-comment recording that the table is ported from
-`attribute-wars/docs/hardware/detect_machine_ay.asm`. Create
-`src/machine_class.c`:
+Create `src/machine.c`. It is hardware, so it may include `z80.h`.
 
 ```c
 /*
- * machine_class.c -- the machine decision table (pure, host-tested).
+ * machine.c -- SCLD presence probe and the boot-time override (target only).
  *
- * Ported from the reference detector in attribute-wars,
- * docs/hardware/detect_machine_ay.asm. The probes live in machine.c; this file
- * holds only the logic that turns their results into an identity, so it can be
- * tested without hardware.
- *
- * Assumptions inherited from the reference detector: factory-standard machines;
- * TC2048 AY expansions use ZX128-compatible ports; a ZX48 with a Melodik-style
- * AY looks like a ZX128; a TC2048 modified with an AY at $F5/$F6 looks like a
- * 2068.
- */
-#include "machine.h"
-
-u8 machine_classify(u8 scld, u8 ay_timex, u8 ay_zx)
-{
-    if (scld) {
-        return ay_timex ? MACHINE_TS2068 : MACHINE_TC2048;
-    }
-    return ay_zx ? MACHINE_ZX128 : MACHINE_ZX48;
-}
-
-u8 machine_class_has_scld(u8 machine)
-{
-    return (u8)(machine == MACHINE_TC2048 || machine == MACHINE_TS2068);
-}
-
-const char *machine_name(u8 machine)
-{
-    switch (machine) {
-    case MACHINE_ZX48:   return "ZX48";
-    case MACHINE_ZX128:  return "ZX128";
-    case MACHINE_TC2048: return "TC2048";
-    case MACHINE_TS2068: return "TS2068";
-    default:             return "?";
-    }
-}
-```
-
-Add `src/machine_class.c` to `COMMON_SOURCES` in the Makefile.
-
-- [ ] **Step 4: Run to verify it passes**
-
-```bash
-make test
-```
-
-Expected: `test_machine_class: 16 checks passed`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A
-git commit -m "machine: add the host-testable machine decision table
-
-Ported from the reference detector in attribute-wars. The port probes are
-hardware and cannot be host-tested; the table that turns three probe results
-into a machine identity can be, including the combinations the hardware never
-produces."
-```
-
----
-
-### Task 7: The port probes, the guard and the banner
-
-**Files:**
-- Create: `src/machine.c`
-- Modify: `include/machine.h`, `src/main.c`, `Makefile`
-
-**Interfaces:**
-- Consumes: `machine_classify`, `machine_name`, `machine_class_has_scld`.
-- Produces: `u8 machine_detect(void);` (runs the probes once, caches, returns a
-  `MACHINE_*` value) and `u8 machine_caps_shift_held(void);`.
-
-- [ ] **Step 1: Write the probes**
-
-Create `src/machine.c`. It is hardware, so it may include `z80.h` and is never
-compiled on the host.
-
-```c
-/*
- * machine.c -- runtime machine identification (hardware; target only).
- *
- * Ported from attribute-wars, docs/hardware/detect_machine_ay.asm.
+ * Ported from the reference detector in the attribute-wars repository,
+ * docs/hardware/detect_machine_ay.asm. Only the SCLD half is kept: with one TAP
+ * per machine there is no mode to select, so the AY probes that told a TC2048
+ * from a TS2068 would have served nothing but a banner string.
  *
  * MUST run before video initialisation and before the IM2 handler is installed,
  * with interrupts disabled: it writes port 0xFF, which on a Timex is the display
  * mode register.
  *
- * The SCLD probe toggles ONLY bits 3..5 -- the palette bits -- so screen mode,
+ * The probe toggles ONLY bits 3..5 -- the palette bits -- so screen mode,
  * interrupt control and EXROM/DOCK selection are preserved, and it restores the
  * original value on both exits. On a Spectrum port 0xFF is unattached: the write
  * is harmless and the read-back does not match.
- *
- * The AY probes leave register 11 SELECTED, because the currently selected
- * register cannot be read back. Any later AY user must select its own register
- * before writing.
  */
 #include "machine.h"
 #include <z80.h>
 
 #define PORT_SCLD 0x00FFu
-#define PORT_AY_TIMEX_SEL 0x00F5u
-#define PORT_AY_TIMEX_DAT 0x00F6u
-#define PORT_AY_ZX_SEL 0xFFFDu
-#define PORT_AY_ZX_DAT 0xBFFDu
 #define PORT_KEY_CAPS 0xFEFEu
 
-static u8 detected;
-static u8 have_detected;
+static u8 has_scld;
+static u8 probed;
 
-static u8 probe_scld(void)
+u8 machine_has_scld(void)
 {
-    u8 original = (u8)z80_inp(PORT_SCLD);
+    static const u8 bits[3] = { 0x08u, 0x10u, 0x20u };
+    u8 original;
     u8 pattern;
     u8 i;
-    static const u8 bits[3] = { 0x08u, 0x10u, 0x20u };
+
+    if (probed) {
+        return has_scld;
+    }
+
+    original = (u8)z80_inp(PORT_SCLD);
+    has_scld = 1u;
 
     for (i = 0; i < 3u; ++i) {
         pattern = (u8)(original ^ bits[i]);
         z80_outp(PORT_SCLD, pattern);
         if ((u8)z80_inp(PORT_SCLD) != pattern) {
-            z80_outp(PORT_SCLD, original);   /* harmless on a Spectrum */
-            return 0;
+            has_scld = 0u;
+            break;
         }
     }
-    z80_outp(PORT_SCLD, original);
-    return 1;
-}
 
-static u8 probe_ay(u16 sel_port, u16 dat_port)
-{
-    static const u8 patterns[3] = { 0x55u, 0xAAu, 0x3Cu };
-    u8 original;
-    u8 i;
-
-    z80_outp(sel_port, 11u);                 /* register 11 is fully writable */
-    original = (u8)z80_inp(dat_port);
-
-    for (i = 0; i < 3u; ++i) {
-        z80_outp(dat_port, patterns[i]);
-        if ((u8)z80_inp(dat_port) != patterns[i]) {
-            z80_outp(dat_port, original);
-            return 0;
-        }
-    }
-    z80_outp(dat_port, original);
-    return 1;
-}
-
-u8 machine_detect(void)
-{
-    u8 scld, ay_timex = 0, ay_zx = 0;
-
-    if (have_detected) {
-        return detected;
-    }
-
-    scld = probe_scld();
-    if (scld) {
-        ay_timex = probe_ay(PORT_AY_TIMEX_SEL, PORT_AY_TIMEX_DAT);
-    }
-    if (!scld || !ay_timex) {
-        ay_zx = probe_ay(PORT_AY_ZX_SEL, PORT_AY_ZX_DAT);
-    }
-
-    detected = machine_classify(scld, ay_timex, ay_zx);
-    have_detected = 1;
-    return detected;
+    z80_outp(PORT_SCLD, original);   /* harmless on a Spectrum */
+    probed = 1u;
+    return has_scld;
 }
 
 u8 machine_caps_shift_held(void)
 {
-    /* Keyboard half-row 0xFEFE, bit 0, active low. Read directly: keymap and
-     * the IM2 handler are not running this early. */
+    /* Read directly: keymap and the IM2 handler are not running this early. */
     return (u8)(((u8)z80_inp(PORT_KEY_CAPS) & 0x01u) == 0u);
 }
 ```
 
-**Note the AY probe ordering:** the ZX-port probe also runs on a Timex without a
-Timex-port AY, which is what identifies a TC2048 carrying a ZX-compatible AY
-expansion. That matches the reference detector's `probe_ay_tc2048`, which simply
-jumps to `probe_ay_zx`.
+Create `include/machine.h` with the two prototypes and a comment recording the
+port `0xFF` contract and the reference detector's provenance.
+
+**No host test exists for this file, and that is correct** — it is nothing but
+port I/O. Do not invent one that mocks `z80_inp`; a test that asserts a mock was
+called proves only that the mock works.
 
 - [ ] **Step 2: Wire the guard into startup**
 
-In `src/main.c`, before `video_init`:
+In `src/main.c`, before `video_init`, and only in the Timex build:
 
 ```c
-    {
-        u8 machine = machine_detect();
-
 #ifdef TERM_TIMEX
-        if (!machine_class_has_scld(machine) && !machine_caps_shift_held()) {
-            guard_refuse();     /* prints and halts; never returns */
-        }
-#endif
-        banner_machine = machine;
+    if (!machine_has_scld() && !machine_caps_shift_held()) {
+        guard_refuse();     /* prints and halts; never returns */
     }
+#endif
 ```
 
-`guard_refuse()` writes a short message using the ULA text mode already active at
-boot and halts with interrupts disabled. Implement it in `src/main.c` with the
-ROM print routine rather than the terminal's own renderer, which is not
-initialised yet:
+`guard_refuse()` writes a short message through the ROM print routine in the ULA
+text mode already active at boot — the terminal's own renderer is not up yet
+and, on this machine, would be unreadable anyway:
 
 ```c
-/* The terminal's renderer is not up yet and, on this machine, would not be
- * readable anyway. Use the boot-time ULA text mode via the ROM. */
+/* The terminal's renderer is not initialised, and on a machine without an SCLD
+ * it would paint an unreadable half-image. Use the boot-time ULA text mode. */
 static void guard_refuse(void) __naked
 {
     __asm
@@ -1319,63 +1131,71 @@ guard_msg:
 }
 ```
 
-- [ ] **Step 3: Put the machine name in the banner**
+- [ ] **Step 3: Name the machine in the banner from the build, not a probe**
 
-The startup stream in `src/main.c` is a string literal. Feed the machine name
-through the parser after it, so no literal has to be duplicated:
+The banner reports what this build targets, which is now a compile-time fact:
 
 ```c
-    vt_feed_text(&vt, &scr, "\r\nHW: ");
-    vt_feed_text(&vt, &scr, machine_name(banner_machine));
-    vt_feed_text(&vt, &scr, machine_class_has_scld(banner_machine)
-                 ? "  80x24 hi-res\r\n" : "  40x24 ULA\r\n");
+#ifdef TERM_TIMEX
+#define BANNER_HW "Timex (SCLD)  80x24 hi-res"
+#else
+#define BANNER_HW "ZX Spectrum (ULA)  40x24"
+#endif
 ```
 
-Add the helper next to the existing feed loop:
+Feed it through the parser after the startup stream, using a small helper beside
+the existing feed loop:
 
 ```c
-static void vt_feed_text(vtparse_t *vt, screen_t *scr, const char *p)
+static void vt_feed_text(vtparse_t *v, screen_t *s, const char *p)
 {
     while (*p != '\0') {
-        vt_feed(vt, scr, (u8)*p);
+        vt_feed(v, s, (u8)*p);
         ++p;
     }
 }
 ```
 
-- [ ] **Step 4: Verify on the target**
+- [ ] **Step 4: Add `src/machine.c` to the Timex source list**
+
+In the `Makefile`, add it to `COMMON_SOURCES` — both builds compile it, since the
+ZX build also uses `machine_caps_shift_held` for nothing today but costs only the
+probe it does not call. If you prefer, add it to `TIMEX_SOURCES` only and guard
+the `main.c` call site; say which you chose and why.
+
+- [ ] **Step 5: Verify what can be verified now**
 
 ```bash
-make tap && make run-tc2048
+make test && make tap && make smoke
 ```
 
-Expected: the banner reads `HW: TC2048  80x24 hi-res`. Then:
+Expected: unchanged host suite, a building TAP, and a passing smoke test — the
+guard must **not** fire on a TC2048, which is what `make smoke` runs on. Confirm
+the banner shows the Timex string.
 
-```bash
-make tap && make run TIMEX_MACHINE=TC2048
-```
+The guard actually refusing, and CAPS SHIFT bypassing it, need a non-Timex
+machine and are covered by the smoke matrix in Task 11. Do not fake them here.
 
-The guard case needs a non-Timex machine, which the current `run` target does not
-offer; verify it in Task 11 once the ZEsarUX smoke covers all five combinations.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
-git commit -m "machine: probe the ports, guard the wrong machine, name it in the banner
+git commit -m "machine: refuse to run the Timex build without an SCLD
 
-The SCLD probe toggles only the palette bits of port 0xFF and restores them,
-so it is harmless on a Spectrum and non-destructive on a Timex. The AY probes
-identify TS2068 against TC2048 and ZX128 against ZX48, and leave register 11
-selected, as the reference detector documents.
+The Timex build sends half its pixels to 0x6000, which a plain Spectrum does
+not display, so it would paint an unreadable half-image with no hint why --
+after a tape load that costs minutes on real hardware.
 
-The Timex build refuses to start without an SCLD rather than painting a
-half-image; holding CAPS SHIFT overrides that for clones whose port decoding
-fools the probe."
+One probe of port 0xFF, toggling only the palette bits and restoring them, so
+it is harmless on a Spectrum and non-destructive on a Timex. Holding CAPS
+SHIFT bypasses it for clones whose port decoding fools the probe.
+
+The four-machine classifier this task originally carried is cut: with one TAP
+per machine, detection selects nothing, and the AY probes served only a
+banner string."
 ```
 
 ---
-
 ### Task 8: The ULA geometry and the two-pass host suite
 
 **Files:**
@@ -1491,7 +1311,7 @@ done
 ```
 
 Keep the width-independent suites (`test_font`, `test_conn`, `test_keybuf`,
-`test_keymap`, `test_hires`, `test_machine_class`) outside the loop, compiled
+`test_keymap`, `test_hires`) outside the loop, compiled
 once with `-DTERM_TIMEX`.
 
 **`test_screen.c` and `test_vtparse.c` must not hardcode 80.** Any assertion
@@ -1819,9 +1639,9 @@ between them cover:
 
 | TAP | ZEsarUX machine | Expected |
 |---|---|---|
-| `term.tap` | `TC2048` | 80 columns, banner `TC2048`, glyphs correct |
-| `term-zx.tap` | `48k` | 40 columns, banner `ZX48`, glyphs correct |
-| `term-zx.tap` | `TC2048` | 40 columns, banner `TC2048` — **the safe-default claim** |
+| `term.tap` | `TC2048` | 80 columns, banner names the Timex build, glyphs correct |
+| `term-zx.tap` | `48k` | 40 columns, banner names the ZX build, glyphs correct |
+| `term-zx.tap` | `TC2048` | 40 columns, banner names the ZX build — **the safe-default claim** |
 | `term.tap` | `48k` | guard message on screen, program halted |
 | `term.tap` | `48k`, CAPS SHIFT held | guard bypassed, program running |
 
@@ -1899,9 +1719,9 @@ since they are alternatives behind `render_geom.h`. `blit_flush(screen_t *)`,
 `blit_cursor_toggle(const screen_t *)` and `blit_scroll_region(screen_t *, u8,
 u8, s8)` are declared once in `blit.h` and implemented twice. `video_init(u8)`
 and `video_clear(void)` likewise. The dirty API introduced in Task 2 is used with
-exactly those names in Tasks 3, 4, 5, 8 and 9. `machine_classify`,
-`machine_name` and `machine_class_has_scld` are defined in Task 6 and consumed in
-Task 7 with matching signatures.
+exactly those names in Tasks 3, 4, 5, 8 and 9. `machine_has_scld` and
+`machine_caps_shift_held` are defined and consumed within Task 6 alone, which is
+the whole of what remains of machine detection.
 
 **One gap worth naming.** Task 5 Step 1 asks for baseline numbers from a harness
 that Task 5 itself creates, so the "before" measurement happens after four tasks

@@ -10,21 +10,37 @@ There is no host behind it, so the terminal runs in
 loopback: type and the bytes come back through the VT parser onto the screen.
 Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/zx-vt102-terminal/issues/1).
 
-VT102-style terminal for Timex 2048/2068-class machines using Timex hi-res
-512x192 video for an 80x24 text display.
+VT102-style terminal built from one source tree, with two TAPs for two
+different machines:
+
+| `make` target | file | machine | geometry | video |
+|---|---|---|---|---|
+| `make tap` | `build/term.tap` | Timex TC2048/TC2068/TS2068 | 80x24 | SCLD hi-res (512x192, two display files) |
+| `make tap-zx` | `build/term-zx.tap` | ZX Spectrum 48K/128K (and Timex) | 40x24 | ULA (256x192, one display file) |
+
+Both add an `-if1` variant (`make if1` / `make if1-zx`) that swaps the
+loopback demo for a real Interface 1 RS-232 backend.
+
+**The two builds are not symmetric.** The Timex build depends on the SCLD
+hi-res video hardware; it probes for one at startup and refuses to run rather
+than paint an unreadable half-image on a machine that doesn't have it (see
+`src/machine.c`/`guard_refuse()` in `src/main.c` — hold CAPS SHIFT to bypass
+the probe on a clone whose port decoding fools it). The ZX build has no such
+guard and needs none: a Timex boots in plain Spectrum-compatible ULA mode, so
+`build/term-zx.tap` runs correctly on **both** a stock ZX Spectrum and any
+Timex 2048/2068-class machine. In short: unsure which machine you're loading
+onto, or targeting a real (non-Timex) Spectrum? Load the `-zx` TAP.
 
 ![Rogue played over the Timex VT102 terminal in ZEsarUX](docs/rogue.png)
 
 Above: the original Rogue running on a Unix host, played through the Timex
 terminal in ZEsarUX.
 
-A second target for the stock ZX Spectrum — 40x24 on ULA graphics with the same
-6-px font, built from the same source tree — is **designed but not yet
-implemented**; see
-[the design](docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md).
+See [the design](docs/superpowers/specs/2026-07-26-zx-spectrum-target-design.md)
+for how the two targets share one codebase.
 
 The normal emulator workflow uses ZEsarUX plus its ZRCP remote protocol. The
-bridge can either connect the Timex terminal to a real Unix PTY/shell, or to
+bridge can either connect the terminal to a real Unix PTY/shell, or to
 local stdin/stdout for testing.
 
 ## Screenshots
@@ -69,6 +85,8 @@ multiple emulator sessions. When you do set it, use the same value for
 
 ## Installation / Build
 
+For the Timex hi-res, 80-column build:
+
 ```sh
 make tap
 ```
@@ -80,6 +98,19 @@ build/term.tap
 build/term.map
 ```
 
+For the ZX Spectrum ULA, 40-column build (also runs on a Timex):
+
+```sh
+make tap-zx
+```
+
+This creates:
+
+```text
+build/term-zx.tap
+build/term-zx.map
+```
+
 The startup screen shows the program version, UTC build time, and git commit
 short hash. Override them when needed:
 
@@ -87,13 +118,14 @@ short hash. Override them when needed:
 make tap VERSION=0.1.0 BUILD_DATE=2026-06-23T12:00:00Z GIT_COMMIT=abcdef123456
 ```
 
-For Interface 1 RS-232 hardware:
+For Interface 1 RS-232 hardware, either machine:
 
 ```sh
-make if1
+make if1        # Timex, 80 columns -> build/term-if1.tap
+make if1-zx     # ZX Spectrum, 40 columns -> build/term-zx-if1.tap
 ```
 
-For release-style artifacts with versioned filenames:
+For release-style artifacts with versioned filenames, all four TAPs at once:
 
 ```sh
 make release-build VERSION=0.1.0
@@ -102,15 +134,23 @@ make release-build VERSION=0.1.0
 This creates:
 
 ```text
-dist/zx-vt102-terminal-0.1.0.tap
-dist/zx-vt102-terminal-0.1.0-if1.tap
+dist/zx-vt102-terminal-0.1.0.tap        # Timex, 80 columns (same file as build/term.tap)
+dist/zx-vt102-terminal-0.1.0-if1.tap    # Timex, 80 columns, Interface 1
+dist/zx-vt102-terminal-0.1.0-zx.tap     # ZX Spectrum, 40 columns (same file as build/term-zx.tap)
+dist/zx-vt102-terminal-0.1.0-zx-if1.tap # ZX Spectrum, 40 columns, Interface 1
 ```
+
+Careful with the first filename: the project is named `zx-vt102-terminal` (it
+predates this repo having an actual ZX Spectrum target), but the *file*
+without a `-zx` suffix is the **Timex-only** 80-column build. The one that
+runs on a real ZX Spectrum is the one with `-zx` in its name.
 
 GitHub releases are built from tags named `v*`, for example `v0.1.0`. The
 release workflow uses the official `z88dk/z88dk:latest` Docker image and
-uploads both TAP files plus a zip containing them.
+uploads all four TAP files plus a zip containing them.
 
-Install the optional local terminfo entry:
+Install the local terminfo entries (`timex-vt102` for the 80-column build,
+`zx-vt102` for the 40-column build):
 
 ```sh
 make install-terminfo
@@ -118,9 +158,11 @@ make install-terminfo
 
 ## Run As A Real Unix Terminal
 
-Use this mode for a shell, `ssh`, `vi`, `less`, etc. It creates a Unix PTY,
-sets `TERM=vt100`, `COLUMNS=80`, `LINES=24`, and bridges it to the Timex
-terminal in ZEsarUX.
+Use this mode for a shell, `ssh`, `vi`, `less`, etc. It creates a Unix PTY and
+bridges it to the terminal running in ZEsarUX. `make run-zrcp`/`shell-zrcp`
+only have ready-made targets for the Timex (80-column) build today; the ZX
+build works the same way by running the Python bridges directly with
+`--map build/term-zx.map --cols 40` (see below).
 
 Terminal 1:
 
@@ -142,14 +184,23 @@ make shell-zrcp ZRCP_CMD='vi test.txt'
 make shell-zrcp ZRCP_CMD='bash -l'
 ```
 
-Direct Python equivalent:
+Direct Python equivalent, Timex build (80 columns, sets `COLUMNS=80`,
+`LINES=24`):
 
 ```sh
 python3 tools/zesarux_stdio_bridge.py --map build/term.map --cmd /bin/zsh -l
 ```
 
-For the most accurate local behavior, install the supplied 80-column terminfo
-entry and advertise it to the PTY:
+The same for the ZX build (40 columns) -- `--cols` sizes the PTY window and,
+unless `--term` overrides it, also picks the matching TERM automatically (see
+"Terminal Compatibility" below):
+
+```sh
+python3 tools/zesarux_stdio_bridge.py --map build/term-zx.map --cols 40 --cmd /bin/zsh -l
+```
+
+For the most accurate local behavior, install the supplied terminfo entries
+and advertise the matching one to the PTY:
 
 ```sh
 make install-terminfo
@@ -167,7 +218,11 @@ Backspace, and terminal line discipline.
 
 ## What Can Run Through ZEsarUX
 
-The ZEsarUX workflow has two useful bridge modes.
+The ZEsarUX workflow has two useful bridge modes. The examples below use the
+Timex build (`make run-zrcp`/`shell-zrcp`/`bridge-zrcp` all target
+`build/term.tap`); for the ZX build, run the same Python commands directly
+with `--map build/term-zx.map --cols 40 --term zx-vt102` instead (there is no
+`-zx` variant of these Make targets yet).
 
 Use `shell-zrcp` when you want the Timex to behave like a real terminal attached
 to a Unix process. This mode creates a macOS PTY, sets the terminal size to
@@ -226,7 +281,9 @@ Current practical limits:
 ## Run The Stdio Bridge
 
 Use this for quick testing, piping files, or manually bridging stdin/stdout.
-This is not a full Unix terminal because there is no PTY behind it.
+This is not a full Unix terminal because there is no PTY behind it. As above,
+these examples target the Timex build; swap in `--map build/term-zx.map` for
+the ZX build.
 
 Terminal 1:
 
@@ -326,15 +383,25 @@ make ci
 ZEsarUX smoke test:
 
 ```sh
-ZRCP_PORT=10140 SMOKE_WAIT=12 make smoke
+ZRCP_PORT=10140 make smoke      # term.tap: startup screen, the SCLD guard firing
+                                 # on a plain Spectrum, CAPS SHIFT bypassing it, and
+                                 # a real-scroll content check
+ZRCP_PORT=10140 make smoke-zx   # term-zx.tap: startup screen on its native 48k,
+                                 # and on a TC2048 (the safe-default claim)
 ```
 
 Use a fresh `ZRCP_PORT` if a previous ZEsarUX session may still be running.
+Each of the five scenarios these two targets run has its own default wait
+time; override with `SMOKE_WAIT=<seconds>` if a given machine needs longer to
+settle. See `test/zesarux_smoke.py`'s module docstring for the full list of
+combinations and the ZRCP-based verification method.
 
 ## Terminal Compatibility
 
-The emulator targets a practical VT102 subset on an 80x24 monochrome Timex
-hi-res display.
+The emulator targets a practical VT102 subset, monochrome, on an 80x24 Timex
+hi-res display or a 40x24 ZX Spectrum ULA display depending on which TAP is
+loaded. The VT102 parser is identical between the two; only the column count
+and the video backend differ.
 
 Supported receive-side behavior includes:
 
@@ -350,10 +417,24 @@ Supported receive-side behavior includes:
   rendered as monochrome no-ops.
 - Programmable tab stops: HTS and TBC.
 
-The bridge still defaults PTY mode to `TERM=vt100` because it is universally
-available and conservative. The repo also ships a local `timex-vt102` terminfo
-entry with `cols#80`, `lines#24`, no color, and only the capabilities this
-terminal is meant to support:
+The repo ships two local terminfo entries, identical except for width and
+name -- install both with `make install-terminfo`:
+
+| entry | `cols` | for |
+|---|---|---|
+| `timex-vt102` | 80 | the Timex build (`build/term.tap` / `build/term-if1.tap`) |
+| `zx-vt102` | 40 | the ZX build (`build/term-zx.tap` / `build/term-zx-if1.tap`) |
+
+The bridges (`tools/if1_pty_bridge.py`, `tools/zesarux_stdio_bridge.py`)
+export whichever entry matches their `--cols` (80 -> `timex-vt102`, otherwise
+`zx-vt102`) unless `--term` overrides it -- this is deliberate: a host told
+the terminal is 80 columns wide when the PTY is really 40 wraps every line
+wrong, and that failure is subtle rather than obvious, so the entry, the
+bridges, and this README all carry the real width instead of a generic
+default. `make shell-zrcp`/`bridge-if1` still default `ZRCP_TERM`/`SERIAL_TERM`
+to `vt100` (a Make variable, always passed explicitly, so the Python
+default above never gets a chance to apply); override it for the correct
+entry:
 
 ```sh
 make install-terminfo
@@ -361,7 +442,8 @@ make shell-zrcp ZRCP_TERM=timex-vt102
 ```
 
 You can also try the system `vt102` entry when the host has it; it usually
-advertises 80 columns too, so it is a reasonable fallback:
+advertises 80 columns too, so it is a reasonable fallback for the Timex
+build (there is no equivalent 40-column system entry for the ZX build):
 
 ```sh
 python3 tools/zesarux_stdio_bridge.py --map build/term.map --term vt102 --cmd /bin/zsh -l
@@ -369,9 +451,13 @@ python3 tools/zesarux_stdio_bridge.py --map build/term.map --term vt102 --cmd /b
 
 ## Notes
 
-- Target machines are Timex 2048/2068-class machines only. The terminal depends
-  on Timex hi-res video.
-- z88dk target is still `+zx`; the program switches Timex video mode itself.
+- Two machines, one codebase: `TERM_TIMEX` builds the 80x24 SCLD hi-res
+  target, `TERM_ZX` builds the 40x24 ULA target. See the table under
+  "Installation / Build" and the asymmetry called out at the top of this
+  README (the ZX build also runs on a Timex; the Timex build refuses to run
+  on a machine without an SCLD).
+- z88dk target is `+zx` for both builds; the program selects Timex hi-res or
+  plain ULA video itself at runtime/compile time (see `src/machine.c`).
 - `shell-zrcp` is the closest emulator workflow to a real terminal.
 - `bridge-zrcp` is useful for quick stdin/stdout experiments.
 - The 6x8 font is extracted from the Timex Terminal TT3000 ROM by

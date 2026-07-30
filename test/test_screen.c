@@ -28,7 +28,7 @@ static void test_init_blanks_grid_and_homes_cursor(void)
     CHECK(s.top == 0 && s.bot == ROWS - 1);
     CHECK(s.attr == 0);
     for (r = 0; r < ROWS; ++r) {
-        CHECK(s.dirty[r] != 0);   /* a fresh screen needs painting */
+        CHECK(screen_row_dirty(&s, r) != 0);   /* a fresh screen needs painting */
     }
 }
 
@@ -39,7 +39,7 @@ static void test_putc_writes_cell_and_advances(void)
 
     screen_init(&s);
     for (r = 0; r < ROWS; ++r) {
-        s.dirty[r] = 0;          /* clear so we can prove putc sets dirty */
+        screen_clear_marks(&s, r);  /* clear so we can prove putc sets dirty */
     }
     s.attr = ATTR_REVERSE;
 
@@ -47,7 +47,7 @@ static void test_putc_writes_cell_and_advances(void)
     CHECK(s.cells[0][0].ch == 'A');
     CHECK(s.cells[0][0].attr == ATTR_REVERSE);
     CHECK(s.cx == 1 && s.cy == 0);
-    CHECK(s.dirty[0] != 0);
+    CHECK(screen_row_dirty(&s, 0) != 0);
 
     screen_putc(&s, 'B');
     CHECK(s.cells[0][1].ch == 'B');
@@ -99,7 +99,7 @@ static void test_scroll_up_and_down_full_screen(void)
     CHECK(s.cells[0][0].ch == 'B');                    /* row 0 <- old row 1 */
     CHECK(s.cells[ROWS - 2][0].ch == (u8)('A' + ROWS - 1));
     CHECK(s.cells[ROWS - 1][0].ch == BLANK_CH);        /* freed bottom blanked */
-    CHECK(s.dirty[0] && s.dirty[ROWS - 1]);
+    CHECK(screen_row_dirty(&s, 0) && screen_row_dirty(&s, ROWS - 1));
 
     stamp_rows(&s);
     screen_scroll(&s, -1);                             /* down by 1 */
@@ -188,7 +188,7 @@ static void test_erase_line_modes(void)
     CHECK(s.cells[2][9].ch == 'X');
     CHECK(s.cells[2][10].ch == BLANK_CH);
     CHECK(s.cells[2][COLS - 1].ch == BLANK_CH);
-    CHECK(s.dirty[2]);
+    CHECK(screen_row_dirty(&s, 2) != 0);
 
     for (c = 0; c < COLS; ++c) {
         s.cells[2][c].ch = 'X';
@@ -220,7 +220,7 @@ static void test_erase_display_modes(void)
     CHECK(s.cells[2][9].ch == 'X');          /* before cursor on row kept */
     CHECK(s.cells[2][10].ch == BLANK_CH);    /* cursor cell erased */
     CHECK(s.cells[3][0].ch == BLANK_CH);     /* rows below cleared */
-    CHECK(s.dirty[2] && s.dirty[ROWS - 1]);
+    CHECK(screen_row_dirty(&s, 2) && screen_row_dirty(&s, ROWS - 1));
 
     fill_all(&s, 'X');
     s.cy = 2;
@@ -250,7 +250,7 @@ static void test_insert_delete_lines(void)
     CHECK(s.cells[2][0].ch == BLANK_CH);       /* inserted blank line */
     CHECK(s.cells[3][0].ch == 'C');            /* old row 2 pushed to row 3 */
     CHECK(s.cx == 5 && s.cy == 2);             /* cursor unchanged */
-    CHECK(s.dirty[2]);
+    CHECK(screen_row_dirty(&s, 2) != 0);
 
     screen_init(&s);
     stamp_rows(&s);
@@ -261,6 +261,49 @@ static void test_insert_delete_lines(void)
     CHECK(s.cells[2][0].ch == 'D');            /* old row 3 pulled up to row 2 */
     CHECK(s.cells[ROWS - 1][0].ch == BLANK_CH);/* freed bottom blanked */
     CHECK(s.cx == 5 && s.cy == 2);
+}
+
+/*
+ * C1 regression: screen_insert_lines()/screen_delete_lines() shift rows in
+ * the *model* via a memmove, but neither has a hardware counterpart the way
+ * screen_scroll() has blit_scroll_region() -- main.c's pump_conn() only calls
+ * blit_scroll_region() when scr->scroll_seq changes, and IL/DL never touch
+ * scroll_seq. Mark *migration* (moving dirty bits along with moved rows,
+ * matching what changed) is correct for screen_scroll(), but it is NOT
+ * sufficient here: a clean row that used to be clean can be moved with new
+ * (different) content and stay marked clean, since nothing else ever asked
+ * it to repaint. This test clears every row's marks first, so a passing
+ * assertion here means the moved/shifted rows were dirtied by the IL/DL call
+ * itself -- not incidentally by screen_init()'s or stamp_rows()'s own marks.
+ */
+static void test_insert_delete_lines_dirty_whole_region(void)
+{
+    screen_t s;
+    u8 r;
+
+    screen_init(&s);
+    stamp_rows(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_clear_marks(&s, r);
+    }
+    s.cy = 0;
+    s.cx = 0;
+    screen_insert_lines(&s, 1);
+    for (r = s.cy; r <= s.bot; ++r) {
+        CHECK(screen_row_dirty(&s, r) != 0);
+    }
+
+    screen_init(&s);
+    stamp_rows(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_clear_marks(&s, r);
+    }
+    s.cy = 0;
+    s.cx = 0;
+    screen_delete_lines(&s, 1);
+    for (r = s.cy; r <= s.bot; ++r) {
+        CHECK(screen_row_dirty(&s, r) != 0);
+    }
 }
 
 static void test_insert_delete_chars(void)
@@ -279,7 +322,7 @@ static void test_insert_delete_chars(void)
     CHECK(s.cells[4][2].ch == BLANK_CH);
     CHECK(s.cells[4][4].ch == BLANK_CH);
     CHECK(s.cells[4][5].ch == (u8)('a' + 2));  /* old col 2 ('c') now at col 5 */
-    CHECK(s.dirty[4]);
+    CHECK(screen_row_dirty(&s, 4) != 0);
 
     for (c = 0; c < COLS; ++c) {
         s.cells[4][c].ch = (u8)('a' + (c % 26));
@@ -484,6 +527,124 @@ static void test_set_scroll_region(void)
     CHECK(s.cells[4][0].ch == 'E');            /* below region untouched */
 }
 
+static void test_dirty_groups(void)
+{
+    screen_t s;
+    u8 g;
+
+    screen_init(&s);
+    for (g = 0; g < DIRTY_GROUPS; ++g) {
+        screen_clear_marks(&s, 0);
+    }
+    CHECK(screen_row_dirty(&s, 0) == 0);
+
+    /* One character dirties exactly one group. Column 5 is in group 1. */
+    screen_cup(&s, 0, 5);
+    screen_putc(&s, 'X');
+    CHECK(screen_row_dirty(&s, 0) != 0);
+    CHECK(screen_group_dirty(&s, 0, 1) != 0);
+    CHECK(screen_group_dirty(&s, 0, 0) == 0);
+    CHECK(screen_group_dirty(&s, 0, 2) == 0);
+
+    /* A span marks every group it touches and none beyond. Columns 4..9 span
+     * groups 1 and 2. */
+    screen_clear_marks(&s, 1);
+    screen_mark_span(&s, 1, 4, 9);
+    CHECK(screen_group_dirty(&s, 1, 0) == 0);
+    CHECK(screen_group_dirty(&s, 1, 1) != 0);
+    CHECK(screen_group_dirty(&s, 1, 2) != 0);
+    CHECK(screen_group_dirty(&s, 1, 3) == 0);
+
+    /* The last column falls in the last group, with nothing past it. */
+    screen_clear_marks(&s, 2);
+    screen_mark_cell(&s, 2, COLS - 1u);
+    CHECK(screen_group_dirty(&s, 2, DIRTY_GROUPS - 1u) != 0);
+    CHECK(screen_row_dirty(&s, 2) != 0);
+
+    /* screen_init must leave every row fully dirty: a fresh screen paints once. */
+    screen_init(&s);
+    CHECK(screen_row_dirty(&s, 0) != 0);
+    CHECK(screen_group_dirty(&s, 0, 0) != 0);
+    CHECK(screen_group_dirty(&s, 0, DIRTY_GROUPS - 1u) != 0);
+
+    /* Column 3 is the last cell of group 0; the cursor advances into group 1.
+     * If the mark were taken after the advance, this would dirty group 1 --
+     * so this is the case that actually pins the ordering. */
+    screen_init(&s);
+    screen_clear_marks(&s, 0);
+    screen_cup(&s, 0, 3);
+    screen_putc(&s, 'X');
+    CHECK(screen_group_dirty(&s, 0, 0) != 0);
+    CHECK(screen_group_dirty(&s, 0, 1) == 0);
+}
+
+static void test_scroll_migrates_dirty_groups(void)
+{
+    screen_t s;
+    u8 r;
+
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_clear_marks(&s, r);
+    }
+
+    /* Dirty one group on row 5 only, then scroll the whole screen up one. The
+     * mark must travel with the content to row 4, not be dropped or smeared. */
+    screen_mark_cell(&s, 5, 5);
+    screen_scroll(&s, 1);
+
+    CHECK(screen_group_dirty(&s, 4, 1) != 0);
+    /* The row that moved away is now row 4's old content; row 5 received row 6,
+     * which was clean, but the freed bottom row must be dirty because it was
+     * blanked. */
+    CHECK(screen_row_dirty(&s, ROWS - 1u) != 0);
+}
+
+static void test_scroll_moves_content_exactly(void)
+{
+    screen_t s;
+    u8 r;
+
+    /* Fill each row with a distinguishable character, then scroll and check
+     * that content moved by exactly the right distance and freed rows blanked.
+     * This must hold for a partial region too, which is where an off-by-one in
+     * a block move would hide. */
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_cup(&s, r, 0);
+        screen_putc(&s, (u8)('A' + (r % 26u)));
+    }
+
+    screen_set_scroll_region(&s, 2, 8);
+    screen_cup(&s, 8, 0);
+    screen_scroll(&s, 1);
+
+    CHECK(s.cells[2][0].ch == (u8)('A' + 3u));   /* row 3 moved to row 2 */
+    CHECK(s.cells[7][0].ch == (u8)('A' + 8u));   /* row 8 moved to row 7 */
+    CHECK(s.cells[8][0].ch == BLANK_CH);         /* freed row blanked */
+    CHECK(s.cells[1][0].ch == (u8)('A' + 1u));   /* above the region untouched */
+    CHECK(s.cells[9][0].ch == (u8)('A' + 9u));   /* below the region untouched */
+
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        screen_cup(&s, r, 0);
+        screen_putc(&s, (u8)('A' + (r % 26u)));
+    }
+    screen_set_scroll_region(&s, 2, 8);
+    screen_scroll(&s, -1);
+
+    CHECK(s.cells[3][0].ch == (u8)('A' + 2u));   /* row 2 moved down to row 3 */
+    CHECK(s.cells[8][0].ch == (u8)('A' + 7u));   /* row 7 moved down to row 8 */
+    CHECK(s.cells[2][0].ch == BLANK_CH);         /* freed row blanked */
+
+    /* A scroll larger than the region must clear it, not read out of bounds. */
+    screen_init(&s);
+    screen_set_scroll_region(&s, 2, 8);
+    screen_scroll(&s, 100);
+    CHECK(s.cells[2][0].ch == BLANK_CH);
+    CHECK(s.cells[8][0].ch == BLANK_CH);
+}
+
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
@@ -497,12 +658,16 @@ int main(void)
     test_erase_line_modes();
     test_erase_display_modes();
     test_insert_delete_lines();
+    test_insert_delete_lines_dirty_whole_region();
     test_insert_delete_chars();
     test_set_attr_sgr();
     test_save_restore_cursor();
     test_modes_default_and_toggle();
     test_putc_deferred_wrap();
     test_set_scroll_region();
+    test_dirty_groups();
+    test_scroll_migrates_dirty_groups();
+    test_scroll_moves_content_exactly();
     printf("screen: %d checks passed\n", checks);
     return 0;
 }

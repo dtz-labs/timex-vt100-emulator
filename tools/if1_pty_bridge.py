@@ -2,9 +2,10 @@
 """
 Bridge a ZX Interface 1 RS-232 serial port to a local pseudo-terminal.
 
-The Timex side speaks raw VT102-ish bytes. This program opens a serial device,
-spawns a local shell/editor side in a PTY, sets the terminal to 80x24, and copies
-bytes in both directions.
+The Timex/ZX side speaks raw VT102-ish bytes. This program opens a serial
+device, spawns a local shell/editor side in a PTY, sets the terminal to
+--cols x --rows (80x24 by default, the Timex build's geometry; pass --cols 40
+for the ZX build), and copies bytes in both directions.
 """
 
 import argparse
@@ -30,21 +31,38 @@ BAUDS = {
 }
 
 
+def default_term(cols):
+    """The bridge's own terminfo entry for the width actually being set, so a
+    40-column run (the ZX build) cannot silently claim TERM=vt100 (or the
+    80-column timex-vt102) while the PTY window really is 40 wide -- see
+    terminfo/zx-vt102.terminfo and terminfo/timex-vt102.terminfo. Requires
+    `make install-terminfo` on the host; --term overrides this explicitly."""
+    return "zx-vt102" if cols == 40 else "timex-vt102"
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Bridge ZX Interface 1 RS-232 to a local 80x24 VT102 PTY."
+        description="Bridge ZX Interface 1 RS-232 to a local VT102 PTY."
     )
     parser.add_argument("serial", help="serial device, e.g. /dev/cu.usbserial-0001")
     parser.add_argument("--baud", type=int, default=9600, choices=sorted(BAUDS))
     parser.add_argument("--cols", type=int, default=80)
     parser.add_argument("--rows", type=int, default=24)
-    parser.add_argument("--term", default="vt100")
+    parser.add_argument(
+        "--term",
+        default=None,
+        help="TERM to export in the PTY; defaults to zx-vt102 at --cols 40, "
+        "otherwise timex-vt102 (see default_term())",
+    )
     parser.add_argument(
         "--cmd",
         nargs=argparse.REMAINDER,
         help="command to run in the PTY; defaults to $SHELL -l",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.term is None:
+        args.term = default_term(args.cols)
+    return args
 
 
 def set_nonblocking(fd):

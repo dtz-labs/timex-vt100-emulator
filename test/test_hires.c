@@ -28,9 +28,31 @@ static void test_hires_addresses(void)
     CHECK(hires_addr(0, 191) == 0x57E0u);  /* very last scanline of file0      */
 }
 
+/*
+ * hires_row_scanline_offset(row, scanline) must agree with hires_addr()'s
+ * own offset math: hires_addr(0, row*8+scanline) - HIRES_FILE0 is exactly
+ * what row_scanline_offset is meant to hand blit_hires.c so it can add either
+ * HIRES_FILE0 or HIRES_FILE1 itself (Task 9 moved this helper out of
+ * blit_hires.c and into this pure, host-tested module).
+ */
+static void test_row_scanline_offset_matches_hires_addr(void)
+{
+    u8 row, scanline;
+
+    for (row = 0; row < 24u; ++row) {
+        for (scanline = 0; scanline < 8u; ++scanline) {
+            u8 prow = (u8)(row * 8u + scanline);
+            u16 want = (u16)(hires_addr(0, prow) - HIRES_FILE0);
+
+            CHECK(hires_row_scanline_offset(row, scanline) == want);
+        }
+    }
+}
+
 int main(void)
 {
     test_hires_addresses();
+    test_row_scanline_offset_matches_hires_addr();
     printf("hires: %d checks passed\n", checks);
     return 0;
 }

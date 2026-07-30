@@ -1,16 +1,26 @@
 /*
  * test_render.c -- host unit tests for the render module (PURE part only).
  *
- * Tests render_cell_bytes (glyph lookup + attribute transforms),
- * render_cell_span and render_pack4 (6-px cell packing into scanline bytes),
- * and render_row_bytes (a full 80-column scanline against a reference
- * painter) -- this branch's primary correctness evidence for the 80-column
- * packing arithmetic. Hardware-touching functions (render_flush,
- * render_cursor) are verified on the emulator.
+ * Tests render_cell_bytes and render_glyph_row_byte (glyph lookup + attribute
+ * transforms), render_cell_span and render_pack4 (6-px cell packing into
+ * scanline bytes), and render_row_bytes -- this is the primary correctness
+ * evidence for both geometries' packing arithmetic. This file is compiled
+ * twice by test/run.sh, once per machine define: with -DTERM_TIMEX it links
+ * render_hires.c and exercises the 80-column packing (full-scanline check
+ * against a reference painter, 16-px margin); with -DTERM_ZX it links
+ * render_ula.c and exercises the 40-column packing instead (test_ula_geometry
+ * below). Tests specific to one geometry's numbers are #ifdef-gated; the
+ * rest (glyph/attribute rendering, render_pack4, render_group_bytes) apply to
+ * both and run in both passes. Hardware-touching functions (blit_flush,
+ * blit_cursor_toggle, in src/blit_hires.c / src/blit_ula.c) are verified on
+ * the emulator.
  */
 #include <assert.h>
 #include <stdio.h>
 #include "render.h"
+#include "render_geom.h"
+#include "font.h"
+#include "screen.h"
 
 static int checks = 0;
 #define CHECK(cond) do { assert(cond); ++checks; } while (0)
@@ -127,11 +137,16 @@ static void test_render_cell_space(void)
     CHECK(out[7] == 0);
 }
 
+#ifdef TERM_TIMEX
 /*
  * Cell geometry. 80 cells of 6 px are centred in the 512-px line, so cell 0
  * starts at pixel 16 (byte 2) and cell 79 ends at pixel 495 (byte 61). The bit
  * phase repeats every four columns; two of the four phases spill into the next
  * byte.
+ *
+ * This whole geometry-specific block is Timex-only (literal 80/79/16/61 are
+ * this build's numbers, not COLS-derived): the ULA build has its own numbers
+ * and its own test_ula_geometry() below.
  */
 static void test_cell_span_phases(void)
 {
@@ -183,11 +198,22 @@ static void test_cell_span_covers_six_pixels(void)
         CHECK((m1 != 0) ? (b + 1u <= 61u) : (b <= 61u));
     }
 }
+#endif /* TERM_TIMEX */
 
+#ifdef TERM_TIMEX
 /*
  * Reference painter: plot each cell's six pixels one at a time into a 64-byte
  * scanline. Slow and obviously correct; the packer must agree with it.
+ *
+ * Timex geometry: 16-px margin, 6-px cell pitch (private to render_hires.c;
+ * mirrored here as literals since this reference painter must stay
+ * independent of the packer it is checking). Only used by
+ * test_pack4_matches_reference and test_row_bytes_matches_reference below, so
+ * it is gated with them.
  */
+#define TEST_LEFT_MARGIN_PX 16u
+#define TEST_CELL_PX        6u
+
 static void paint_reference(const u8 *glyph_row, u8 ncols, u8 line[64])
 {
     u8 col, k, i;
@@ -196,7 +222,7 @@ static void paint_reference(const u8 *glyph_row, u8 ncols, u8 line[64])
         line[i] = 0;
     }
     for (col = 0; col < ncols; ++col) {
-        u16 px = (u16)(RENDER_LEFT_MARGIN_PX + RENDER_CELL_PX * (u16)col);
+        u16 px = (u16)(TEST_LEFT_MARGIN_PX + TEST_CELL_PX * (u16)col);
 
         for (k = 0; k < 6u; ++k) {
             if (glyph_row[col] & (u8)(0x80u >> k)) {
@@ -222,6 +248,7 @@ static void test_pack4_matches_reference(void)
     CHECK(got[1] == want[3]);
     CHECK(got[2] == want[4]);
 }
+#endif /* TERM_TIMEX */
 
 /* A single lit cell must not disturb its neighbours' bytes. */
 static void test_pack4_isolation(void)
@@ -250,13 +277,16 @@ static void test_pack4_no_gaps(void)
     CHECK(got[2] == 0xFF);
 }
 
+#ifdef TERM_TIMEX
 /*
- * render_row_bytes is the one piece of the 80-column blitter with real risk
- * (the fi = 1 + j*3 group-index arithmetic) and no other host coverage, since
- * render_row_fast itself writes absolute video-RAM addresses that only exist
- * on target. Build one full scanline -- all four bit phases, a blank cell,
- * and a fully-lit cell -- and check it against paint_reference exactly like
- * test_pack4_matches_reference does for a single group of four.
+ * render_row_bytes is a piece of the 80-column blitter's packing arithmetic
+ * (the fi = 1 + j*3 group-index arithmetic) with no other host coverage,
+ * since the hardware functions that write pixels (blit_row_groups,
+ * blit_row_clear, in src/blit_hires.c) write absolute video-RAM addresses
+ * that only exist on target. Build one full scanline -- all four bit
+ * phases, a blank cell, and a fully-lit cell -- and check it against
+ * paint_reference exactly like test_pack4_matches_reference does for a
+ * single group of four.
  */
 static void test_row_bytes_matches_reference(void)
 {
@@ -301,6 +331,7 @@ static void test_row_bytes_matches_reference(void)
     CHECK(ev[31] == 0xAA);
     CHECK(od[31] == 0xAA);
 }
+#endif /* TERM_TIMEX */
 
 /*
  * No attribute may light bits 1..0 -- those belong to the cell on the right.
@@ -322,6 +353,99 @@ static void test_attributes_stay_inside_the_cell(void)
     }
 }
 
+static void test_glyph_row_byte_is_shared(void)
+{
+    /* render_glyph_row_byte was static; it must now be callable so both
+     * geometries can use one implementation. Row 1 of 'A' is 0x70 in the ROM
+     * font; reverse inverts only the six owned pixels. */
+    const u8 *a = font_glyph('A');
+
+    CHECK(render_glyph_row_byte(a, 0, 1) == a[1]);
+    CHECK(render_glyph_row_byte(a, ATTR_REVERSE, 1) == (u8)(~a[1] & 0xFCu));
+    CHECK(render_glyph_row_byte(a, ATTR_UNDERLINE, 7) == 0xFCu);
+    CHECK((render_glyph_row_byte(a, ATTR_REVERSE, 3) & 0x03u) == 0u);
+}
+
+/*
+ * Task 5: the four-cell-group -> three-scanline-byte mapping that blit_flush's
+ * fast path uses to write only the groups a row's dirty bitmap marks. Pure
+ * arithmetic (no display memory needed), so it is host-testable even though
+ * the blitter that consumes it is not. Every group's three bytes must be
+ * distinct, inside the margins (index 1..30 -- 0 and 31 are the untouched
+ * margin columns), and never claimed by two groups: that would mean one
+ * group's write clobbers another's pixels.
+ */
+static void test_group_byte_mapping(void)
+{
+    u8 idx[3], file[3];
+    u8 g, k;
+    u8 seen_ev[32], seen_od[32];
+
+    for (k = 0; k < 32u; ++k) { seen_ev[k] = 0; seen_od[k] = 0; }
+
+    for (g = 0; g < DIRTY_GROUPS; ++g) {
+        render_group_bytes(g, idx, file);
+        for (k = 0; k < 3u; ++k) {
+            CHECK(idx[k] >= 1u && idx[k] <= 30u);
+            if (file[k] == 0u) {
+                CHECK(seen_ev[idx[k]] == 0u);
+                seen_ev[idx[k]] = 1u;
+            } else {
+                CHECK(seen_od[idx[k]] == 0u);
+                seen_od[idx[k]] = 1u;
+            }
+        }
+    }
+}
+
+#ifdef TERM_ZX
+/*
+ * ULA geometry: 40 cells of 6 px centred in the 32-byte scanline with an 8-px
+ * margin each side, so cells occupy bytes 1..30 and bytes 0/31 stay margin.
+ * Four cells is 24 px is exactly 3 CONSECUTIVE bytes here (no even/odd file
+ * split), unlike hi-res where the same three bytes alternate between the two
+ * display files -- see test_row_bytes_matches_reference above for that case.
+ */
+static void test_ula_geometry(void)
+{
+    u8 byte_idx, sh, mask0, mask1;
+    u8 ev[32], od[32];
+    u8 g[COLS];
+    u8 c;
+
+    /* Column 0 starts on a byte boundary 8 px in; the phase repeats every 4. */
+    render_cell_span(0, &byte_idx, &sh, &mask0, &mask1);
+    CHECK(byte_idx == 1u);
+    CHECK(sh == 0u);
+    CHECK(mask0 == 0xFCu);
+    CHECK(mask1 == 0u);
+
+    render_cell_span(1, &byte_idx, &sh, &mask0, &mask1);
+    CHECK(byte_idx == 1u);
+    CHECK(sh == 6u);
+    CHECK(mask1 != 0u);            /* spills into byte 2 */
+
+    render_cell_span(4, &byte_idx, &sh, &mask0, &mask1);
+    CHECK(byte_idx == 4u);         /* four cells later, three bytes on */
+    CHECK(sh == 0u);
+
+    /* The last cell must stay inside byte 30, leaving byte 31 as margin. */
+    render_cell_span((u8)(COLS - 1u), &byte_idx, &sh, &mask0, &mask1);
+    CHECK(byte_idx <= 30u);
+    CHECK(byte_idx + (mask1 ? 1u : 0u) <= 30u);
+
+    /* A full row of solid cells must fill bytes 1..30 and leave 0 and 31 alone. */
+    for (c = 0; c < COLS; ++c) { g[c] = 0xFCu; }
+    for (c = 0; c < 32u; ++c) { ev[c] = 0xAAu; od[c] = 0xAAu; }
+    render_row_bytes(g, ev, od);
+    CHECK(ev[0] == 0xAAu);
+    CHECK(ev[31] == 0xAAu);
+    for (c = 1; c < 31u; ++c) {
+        CHECK(ev[c] == 0xFFu);
+    }
+}
+#endif /* TERM_ZX */
+
 int main(void)
 {
     test_render_cell_normal();
@@ -331,14 +455,23 @@ int main(void)
     test_render_cell_graphics();
     test_render_cell_invalid();
     test_render_cell_space();
+#ifdef TERM_TIMEX
     test_cell_span_phases();
     test_cell_span_last_column();
     test_cell_span_covers_six_pixels();
     test_pack4_matches_reference();
+#endif
     test_pack4_isolation();
     test_pack4_no_gaps();
+#ifdef TERM_TIMEX
     test_row_bytes_matches_reference();
+#endif
     test_attributes_stay_inside_the_cell();
+    test_glyph_row_byte_is_shared();
+    test_group_byte_mapping();
+#ifdef TERM_ZX
+    test_ula_geometry();
+#endif
 
     printf("render: %d checks passed\n", checks);
     return 0;

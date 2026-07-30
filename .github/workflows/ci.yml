@@ -47,22 +47,39 @@ jobs:
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git_commit="${GITHUB_SHA::12}"
           # z88dk/z88dk:latest is an Alpine image with no python3, so the IM2
-          # image-limit gate cannot run inside `make tap if1` here -- it runs
-          # as its own step below, on the runner, against the .map files this
-          # step produces.
+          # image-limit gate cannot run inside `make tap if1 tap-zx if1-zx`
+          # here -- it runs as its own step below, on the runner, against the
+          # .map files this step produces. Task 9 added the ZX build matrix
+          # (tap-zx/if1-zx); all four targets are built and gated here.
           docker run --rm -v "$PWD":/src -w /src \
             -e VERSION=ci \
             -e BUILD_DATE="$build_date" \
             -e GIT_COMMIT="$git_commit" \
             -e SKIP_IMAGE_LIMIT_CHECK=1 \
-            z88dk/z88dk:latest make tap if1
+            z88dk/z88dk:latest make tap if1 tap-zx if1-zx
           mkdir -p dist
           cp build/term.tap dist/zx-vt102-terminal-ci.tap
           cp build/term-if1.tap dist/zx-vt102-terminal-ci-if1.tap
+          cp build/term-zx.tap dist/zx-vt102-terminal-ci-zx.tap
+          cp build/term-zx-if1.tap dist/zx-vt102-terminal-ci-zx-if1.tap
           ls -l dist
 
       - name: Check IM2 image limit (outside the container)
         run: make check-image-limit
+
+      # Printed, not gated (D25): a T-state regression threshold would need
+      # a pinned compiler image, and this job intentionally floats on
+      # z88dk/z88dk:latest. `make bench` (tools/bench.sh) is deliberately
+      # NOT a prerequisite of the `ci` target above -- that target's own
+      # host-tests job has no z88dk at all -- so it runs here instead, in
+      # the one job that already has the toolchain this needs.
+      # continue-on-error keeps a bench build hiccup from failing the run;
+      # see docs/perf/benchmarks.md for the recorded reference numbers this
+      # step's output should be compared against by eye.
+      - name: Print renderer benchmarks (non-blocking)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD":/src -w /src z88dk/z88dk:latest make bench
 
       - name: Upload TAP artifacts
         uses: actions/upload-artifact@v4

@@ -37,7 +37,7 @@ Continuing the D-numbering.
 | D18 | **The Spectrum build is 40×24, not the 42 that would fit.** | 4 cells × 6 px = 24 px = exactly 3 bytes, so 40 cells are 10 groups filling scanline bytes 1..30, with a byte-aligned 8-px margin each side. 42 cells would leave a 2-cell tail straddling a half-byte, needing a separate path in packing, scrolling, and cursor drawing. Two extra columns is not worth a second code path in three places. |
 | D19 | **`COLS` stays a compile-time constant, derived from a single machine define.** | Direct consequence of D17. The build passes exactly one of `-DTERM_TIMEX` / `-DTERM_ZX`; `screen.h` derives `COLS` from it. Width is never passed independently, so a mismatched pair — a ZX build told it has 80 columns — cannot be expressed. **The second width costs `screen.c` and `vtparse.c` no change at all**; tab-stop bitmap sizing in `vtparse.h` already derives from `COLS`. (Both files *are* modified in this slice, but by the performance items in §7, not by the target split: `screen.c` for scrolling and dirty tracking, `vtparse.c` for the two places it sets `s->dirty` directly.) |
 | D20 | **The Spectrum build is monochrome with one global colour.** | A cell is 6 px; an attribute block is 8 px. Per-cell colour is physically impossible — a colour change mid-line would corrupt the neighbouring cell. The attribute file is filled once with `0x47` (bright white on black), border black. This matches Timex hi-res, which is also monochrome, so `REVERSE` and `UNDERLINE` behave identically on both machines. |
-| D21 | **Machine detection is kept, but as a wrong-machine guard and a banner line — not a mode selector.** | With D17 there is no mode to select. The Timex build on a Spectrum would render garbage (half its pixels go to `0x6000`, which the ULA does not display), so that build refuses to start on a non-SCLD machine. The reverse needs no guard: a Timex boots in Spectrum-compatible ULA mode, so the Spectrum TAP runs correctly on it at 40 columns. |
+| D21 | **Machine detection shrinks to one SCLD probe, used as a wrong-machine guard. Not a mode selector, and not a machine identifier.** | With D17 there is no mode to select. The Timex build on a Spectrum would render garbage (half its pixels go to `0x6000`, which the ULA does not display), so that build refuses to start on a non-SCLD machine. The reverse needs no guard: a Timex boots in Spectrum-compatible ULA mode, so the Spectrum TAP runs correctly on it at 40 columns. **Revised mid-implementation:** the four-machine classifier this decision originally carried (two AY probes, a decision table, sixteen host tests) changed no pixel and served only a banner string, and one of the machines it identified cannot load a Spectrum-format TAP at all. Cut. The banner now names the build via `#ifdef`. See §6. |
 | D22 | **Holding CAPS SHIFT at boot bypasses the guard. Timex build only.** | Insurance for clones and interfaces that decode port `$FF` incompletely and could make a genuine Timex fail the probe. Costs a few dozen bytes and cannot be debugged any other way on real hardware. The Spectrum build has no guard, so the key does nothing there. Accepted consequence: holding CAPS SHIFT with the Timex TAP on a real Spectrum produces exactly the unreadable half-image D21 exists to prevent — that is the point of an override, and it is reachable only by deliberate action. |
 | D23 | **The IM2 vector table moves off the hardcoded `0xD300`/`0xD4D4` it once used and gains a build-time image-limit gate.** | `main.c` used to write the table at a hardcoded `0xD300`, trampoline at `0xD4D4`, right above an image that once ended at `0xCD58`; the linker knew nothing about either address, so a build that grew past the table linked cleanly and then overwrote its own code during IM2 setup. The table moved through an interim `0xF900`, then to `0xE000` (`I = 0xE0`) after a fix-wave measurement found real stack/call depth reaching down to `0xEF3D` — deeper than `0xF900` and a considered `0xF000` fallback. That measurement's suspected "deep call chain" turned out to be one oversized stack frame in `main()` (`screen_t scr` and `vtparse_t vt`, together nearly the whole 4,123 bytes); hoisting both to file scope fixed the root cause and moved the table again, to `0xEE00` (`I = 0xEE`), this time because the image had grown, not because the stack still reached that deep. A single source of truth in `include/im2.h`, and `tools/check_image_limit.py`, fails the build if the image, the table, or the stack collide. See §8. |
 | D24 | **The performance findings that touch the code this slice rewrites are done here, not deferred.** | Supersedes D16 for these paths only. Writing the ULA blitter as a copy of the current hi-res path would produce code that the review already shows must be rewritten. See §7 for what is in and what is explicitly not. |
@@ -155,8 +155,7 @@ exactly one of each into a given image.
 | `blit_ula.c` | ZX only | hardware: flush, cursor, scroll over one display file |
 | `video_hires.c` | Timex only | SCLD mode register, clear both files |
 | `video_ula.c` | ZX only | attribute fill, border, clear one file |
-| `machine.c` | both targets | port probes, guard, banner name |
-| `machine_class.c` | host + both targets | pure: `machine_classify()` |
+| `machine.c` | Timex target only | the SCLD probe and the CAPS SHIFT read; no host test, it is pure port I/O |
 | `hires.c` / `hires.h` | host + Timex | survives as its own module with its own test, unchanged; `blit_hires.c` calls it rather than absorbing it |
 | `ula.c` / `ula.h` (new) | host + ZX | its counterpart: `ula_addr()`, the one-file address helper |
 | `video.c` | **removed** | split into `video_hires.c` and `video_ula.c`; `video.h` keeps the shared prototypes |
@@ -186,53 +185,49 @@ not literally inlined as `ld bc,$00ff / in a,(c)`; under `sdcc_iy` it is a libra
 call that loads `BC` from `HL` and does `in l,(c)`. The bus cycle is equivalent,
 which is what matters here.)
 
-**Pure decision table** — the only part that can be tested without hardware:
+**Reduced to a single probe.** This section originally specified a four-machine
+classifier: three port probes, a pure `machine_classify` decision table, and a
+banner naming the detected machine. That was written when detection still chose
+the display mode. Under D17 it does not — the Makefile does, at compile time.
+
+The two AY probes (`$F5/$F6` for TS2068, `$FFFD/$BFFD` for ZX128) therefore
+changed no pixel and existed solely to print a nicer banner string. One of the
+machines they distinguished, the TS2068, cannot load a Spectrum-format TAP at
+all (§11). They are cut, along with `machine_class.c` and its host tests.
+
+**What remains** (`machine.c`, target only, never compiled on the host):
 
 ```c
-u8 machine_classify(u8 scld, u8 ay_timex, u8 ay_zx);
+u8 machine_has_scld(void);        /* probes port 0xFF once, caches */
+u8 machine_caps_shift_held(void); /* keyboard half-row 0xFEFE, bit 0, active low */
 ```
 
-| `scld` | `ay_timex` | `ay_zx` | Result |
-|---|---|---|---|
-| 1 | 1 | — | `MACHINE_TS2068` |
-| 1 | 0 | 1 | `MACHINE_TC2048` (AY expansion present) |
-| 1 | 0 | 0 | `MACHINE_TC2048` |
-| 0 | — | 1 | `MACHINE_ZX128` |
-| 0 | — | 0 | `MACHINE_ZX48` |
+The SCLD probe writes and reads back three patterns on port `$FF`, toggling only
+bits 3..5 — the palette bits — so screen mode, interrupt control and EXROM/DOCK
+selection are preserved. The original value is restored on both exits. On a
+Spectrum the port is unattached: the write is harmless and the read-back does not
+match.
 
-`ay_timex` is only probed when `scld` is set; `machine_classify` treats it as 0
-otherwise, and the host tests cover all eight input combinations including the
-unreachable ones.
+There is no host test for this file, and that is correct: it is nothing but port
+I/O. A test mocking `z80_inp` would assert only that the mock works.
 
-**Hardware layer** (`machine.c`): `machine_probe_scld()`,
-`machine_probe_ay_timex()`, `machine_probe_ay_zx()`.
+**Preconditions.** The probe runs once at startup, with interrupts disabled,
+**before** video initialisation and **before** the IM2 handler is installed —
+port `$FF` is the display mode register on a Timex.
 
-- The SCLD probe writes and reads back three patterns on port `$FF`, toggling
-  only bits 3..5 — the palette bits — so screen mode, interrupt control, and
-  EXROM/DOCK selection are preserved. The original value is restored on both
-  exits. On a Spectrum the port is unattached: the write is harmless and the
-  read-back does not match.
-- The AY probes write and read back `$55`, `$AA`, `$3C` in register 11, then
-  restore the original value. Register 11 remains **selected** afterwards,
-  because the currently selected register cannot be read back. This is inherited
-  from the reference detector and must be repeated as a comment on the probe in
-  `machine.c`, since a later AY user would otherwise be surprised by it.
-
-**Preconditions.** Detection runs once at startup, with interrupts disabled,
-**before** video initialisation and **before** the IM2 handler is installed.
-
-**Guard behaviour (D21, D22).** The Timex build calls `machine_probe_scld()`
+**Guard behaviour (D21, D22).** The Timex build calls `machine_has_scld()`
 first. If no SCLD is present and CAPS SHIFT is not held, it prints a short
-message using the ULA text mode that is already active at boot and halts, rather
-than painting an unreadable half-image. The Spectrum build never refuses; it only
-reports the detected machine.
+message through the ROM print routine, in the ULA text mode already active at
+boot, and halts — rather than painting an unreadable half-image. The Spectrum
+build has no guard: it runs correctly on both families.
 
-The CAPS SHIFT bypass is sampled in the same startup window as the probes —
-keyboard half-row port `0xFEFE`, bit 0, active low — read directly, before the
-IM2 handler is installed, since `keymap`/`keybuf` are not running yet.
+The CAPS SHIFT bypass is sampled in the same startup window — keyboard half-row
+port `0xFEFE`, bit 0, active low — read directly, before the IM2 handler is
+installed, since `keymap`/`keybuf` are not running yet.
 
-Both builds print the detected name in the startup banner, so a detection fault
-on real hardware is visible rather than silent.
+**The banner names the build, not a measurement.** `Timex (SCLD) 80x24 hi-res`
+or `ZX Spectrum (ULA) 40x24`, selected by `#ifdef`. A detection fault is still
+visible, because on a Timex the guard would have refused.
 
 ---
 
@@ -254,6 +249,17 @@ to **~335,000 T (~96 ms) per row and ~2.3 s for a full repaint** if the ULA
 blitter simply mirrors the current hi-res one. That is why D24 exists — this is
 not a copy-and-adjust job. The 40-column figures are extrapolations from the
 80-column measurements and must be confirmed by the benchmark in §9.
+
+**Confirmed (Task 11).** The blitter this project actually shipped is not a
+copy of the hi-res one (D24 held); `tools/bench.sh` measures the real
+`row_normal` cost at both widths in one run. Against the shipped 80-column
+figure (267,267–268,283 T across the tasks that touched it, not the
+670,861 T pre-Task-5 number this section's own extrapolation above used),
+the measured 40-column row is **130,748 T** — 2.2–2.5% below half, well
+inside tolerance. The "roughly half" rule of thumb holds for this renderer
+shape; see `docs/perf/benchmarks.md`, "Task 11: the 40-column row, measured
+against the design's extrapolation" for the full comparison and the CI
+container cross-check.
 
 **In scope**, because this slice rewrites these paths anyway:
 
@@ -305,8 +311,24 @@ not a copy-and-adjust job. The 40-column figures are extrapolations from the
 
 ## 8. Memory map and the IM2 hazard
 
-Measured from `build/term.map` of the current 80-column build, after hoisting
-`main()`'s two large locals to file scope (see below):
+**This section is a dated snapshot, not a live figure.** The address map and
+narrative below record the measurement and reasoning behind the `0xEE00`
+IM2-table placement at the time of the im2-guard follow-up; every later
+change to `src/main.c`, `screen.c`, or the blitters moves the actual image end
+and margin again, in either direction (a whole-branch review found this
+section stale by roughly 1,800 bytes against the build on disk at review
+time, and the very fix wave that corrected that finding moved the numbers
+again before the correction could even be written down). **For the current
+measured margin on all four TAPs, see `docs/perf/benchmarks.md`, "Fix wave:
+memory-map refresh"** (or its most recent equivalent section) rather than
+trusting the numbers quoted here. The `0xEE00` table placement itself,
+`IM2_TABLE_BASE`/`IM2_VECTOR_PAGE` (`include/im2.h`), and
+`tools/check_image_limit.py`'s enforcement are still current; only the
+specific byte counts below are a snapshot.
+
+Measured from `build/term.map` of the 80-column build at the time of the
+im2-guard follow-up, after hoisting `main()`'s two large locals to file scope
+(see below):
 
 ```
 0x4000  display file        (ULA bitmap / hi-res even columns)
@@ -467,9 +489,16 @@ A wrong width here produces subtly wrong wrapping, so it must not default
 silently to 80 for a 40-column terminal.
 
 **Banner.** The 80-column box does not fit in 40. The banner frame is drawn with
-a loop over `COLS` rather than stored as two string literals, which also saves
-roughly 400 bytes of image — relevant given §8. It carries the detected machine
-name and the active geometry.
+a loop over `COLS` rather than stored as two string literals. This was estimated
+to save roughly 400 bytes of image; measured on all four TAPs it instead **grew**
+the image by 300 bytes (`build/term.tap` margin 2514 -> 2214, `2514 - 2214 = 300`
+bytes of growth, not saving) — SDCC's per-call/per-branch overhead under
+`-clib=sdcc_iy` exceeds the literal bytes the loop removes, for functions this
+small. See `docs/perf/benchmarks.md`, "Task 10: image-size estimate vs.
+measured" for the full before/after table and the reason. The banner names the
+build via `#ifdef` (§6, D21) — it does not carry a runtime-detected machine name
+or the active geometry as a runtime value; both are compile-time facts baked
+into the string the `#ifdef` selects.
 
 ---
 
@@ -483,8 +512,6 @@ name and the active geometry.
   (the last stop lands on 32 at 40 columns), erase-in-line, insert/delete
   character, and cursor clamping at both widths **without any production code
   change** — the direct payoff of D19.
-- `test_machine_class.c` (new, named for its module per the `test_<module>.c`
-  convention): `machine_classify()` over all eight input combinations.
 - `test_render.c`: ULA cell span, row packing (10 groups into bytes 1..30, bytes
   0 and 31 untouched), and the 6-px containment check extended to the ULA
   geometry. Existing hi-res assertions unchanged.
@@ -536,7 +563,7 @@ the §7 extrapolation for 40 columns. The rest belongs with the contract fix tha
 | Clones or interfaces that decode port `$FF` incompletely make a genuine Timex fail the guard. | CAPS SHIFT bypass (D22), plus the machine name in the banner so the fault is visible. |
 | The 80-column image may already be close to the IM2 table; the known margin is from the 64-column build. | First implementation task measures it; the gate then makes any future overrun a build failure (§8). |
 | Two artifacts, and users may pick the wrong one. | The Spectrum TAP runs on ZX Spectrums **and the TC2048**, so it is the safe default between those two — verified by the fourth smoke combination in §10. It is not a universal fallback: a TS2068 loads neither TAP (row 1). The Timex TAP refuses rather than showing garbage. |
-| The 40-column T-state figures are extrapolated, not measured. | The benchmark in §10 confirms them before the performance work is called done. |
+| The 40-column T-state figures are extrapolated, not measured. | **Resolved (Task 11):** measured at 130,748 T for `row_normal`, 2.2–2.5% below half the shipped 80-column figure — see §7's "Confirmed (Task 11)" note and `docs/perf/benchmarks.md`. |
 | **The scroll/dirty contract is split across two slices** (§7). This slice implements four of the five steps of the review's robust model and defers the fifth. The deferred piece — `main.c` predicting scrolls from raw bytes — is a P0 the review places *before* the packer work. | Item 7 in §7 is mandatory precisely because removing the `main.c` cursor-row dirtying without it would drop characters on deferred wrap. The residual defect is unchanged from today's behaviour, not worsened. If the deferred piece proves entangled during implementation, pull it in rather than working around it. |
 
 ---
@@ -559,8 +586,7 @@ assembly renderer; the page-aligned font; the scroll/dirty contract fix (§7).
    the existing tests must stay green.
 4. Apply the performance items from §7 to `screen.c` and `blit_hires.c`, and
    record the 80-column benchmark numbers.
-5. Add `machine_class.c` with host tests, then `machine.c` with the probes, the
-   guard, and the banner name.
+5. Add `machine.c` with the SCLD probe, the guard and the CAPS SHIFT bypass.
 6. Add `render_ula.c` with host tests for span, packing, and containment.
 7. Add `blit_ula.c` and `video_ula.c`, written **directly in the fast form**
    established by milestone 4; add the `tap-zx` and `if1-zx` targets; teach

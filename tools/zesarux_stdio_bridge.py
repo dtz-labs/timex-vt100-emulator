@@ -94,6 +94,15 @@ class NewlineTranslator:
         return self._newline()
 
 
+def default_term(cols):
+    """The bridge's own terminfo entry for the width actually being set, so a
+    40-column run (the ZX build) cannot silently claim TERM=vt100 (or the
+    80-column timex-vt102) while the PTY window really is 40 wide -- see
+    terminfo/zx-vt102.terminfo and terminfo/timex-vt102.terminfo. Requires
+    `make install-terminfo` on the host; --term overrides this explicitly."""
+    return "zx-vt102" if cols == 40 else "timex-vt102"
+
+
 def parse_int(text):
     if text.startswith("$"):
         return int(text[1:], 16)
@@ -525,7 +534,12 @@ def main(argv=None):
     parser.add_argument("--mailbox-size", type=int, default=32)
     parser.add_argument("--cols", type=int, default=80)
     parser.add_argument("--rows", type=int, default=24)
-    parser.add_argument("--term", default="vt100")
+    parser.add_argument(
+        "--term",
+        default=None,
+        help="TERM to export in the PTY; defaults to zx-vt102 at --cols 40, "
+        "otherwise timex-vt102 (see default_term())",
+    )
     parser.add_argument(
         "--raw",
         action="store_true",
@@ -563,6 +577,9 @@ def main(argv=None):
         help="run a Unix command under a PTY; defaults to $SHELL -l when used without a command",
     )
     args = parser.parse_args(argv)
+
+    if args.term is None:
+        args.term = default_term(args.cols)
 
     if args.command is not None:
         args.raw = True
