@@ -2,6 +2,7 @@
  * screen.c -- terminal cell-grid model. See screen.h.
  */
 #include "screen.h"
+#include <string.h>
 
 void screen_init(screen_t *s)
 {
@@ -12,7 +13,8 @@ void screen_init(screen_t *s)
             s->cells[r][c].ch = BLANK_CH;
             s->cells[r][c].attr = 0;
         }
-        s->dirty[r] = 1;
+        s->dirty_left[r] = 0;
+        s->dirty[r] = COLS;
     }
     s->cx = 0;
     s->cy = 0;
@@ -30,15 +32,42 @@ void screen_init(screen_t *s)
     s->last_scroll_n = 0;
 }
 
+void screen_dirty_range(screen_t *s, u8 row, u8 first, u8 last)
+{
+    u8 right;
+
+    if (row >= ROWS || first >= COLS) {
+        return;
+    }
+    if (last >= COLS) {
+        last = COLS - 1u;
+    }
+    right = (u8)(last + 1u);
+    if (s->dirty[row] == 0) {
+        s->dirty_left[row] = first;
+        s->dirty[row] = right;
+        return;
+    }
+    if (first < s->dirty_left[row]) {
+        s->dirty_left[row] = first;
+    }
+    if (right > s->dirty[row]) {
+        s->dirty[row] = right;
+    }
+}
+
 void screen_putc(screen_t *s, u8 ch)
 {
+    cell_t *cell;
+
     if (s->wrap_pending) {            /* deferred wrap from a prior last-column write */
         screen_cr(s);                /* (clears wrap_pending, cx -> 0) */
         screen_lf(s);                /* down a row, scrolling at the region bottom */
     }
-    s->cells[s->cy][s->cx].ch = ch;
-    s->cells[s->cy][s->cx].attr = s->attr;
-    s->dirty[s->cy] = 1;
+    cell = &s->cells[s->cy][s->cx];
+    cell->ch = ch;
+    cell->attr = s->attr;
+    screen_dirty_range(s, s->cy, s->cx, s->cx);
     if (s->cx + 1u >= COLS) {
         /* Last column: park the cursor. With autowrap, defer the wrap until the
          * next printable (VT-100). Without it, stay put and overwrite in place. */
@@ -66,10 +95,13 @@ void screen_cup(screen_t *s, u8 row, u8 col)
 /* Blank one row to space/attr-0. */
 static void blank_row(screen_t *s, int r)
 {
-    int c;
-    for (c = 0; c < (int)COLS; ++c) {
-        s->cells[r][c].ch = BLANK_CH;
-        s->cells[r][c].attr = 0;
+    cell_t *cell = &s->cells[r][0];
+    u8 c;
+
+    for (c = 0; c < COLS; ++c) {
+        cell->ch = BLANK_CH;
+        cell->attr = 0;
+        ++cell;
     }
 }
 
@@ -93,28 +125,27 @@ static s8 effective_scroll_n(int top, int bot, int n)
 
 static void scroll_region(screen_t *s, int top, int bot, int n)
 {
-    int absn, r, c;
+    int absn, moved_rows, r;
+    u16 moved_bytes;
 
     n = effective_scroll_n(top, bot, n);
     if (n == 0) {
         return;
     }
     absn = (n > 0) ? n : -n;
+    moved_rows = bot - top + 1 - absn;
+    moved_bytes = (u16)((u16)moved_rows * COLS * (u16)sizeof(cell_t));
 
     if (n > 0) {                       /* scroll up: content moves toward top */
-        for (r = top; r <= bot - absn; ++r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r + absn][c];
-            }
+        if (moved_rows != 0) {
+            memmove(&s->cells[top][0], &s->cells[top + absn][0], moved_bytes);
         }
         for (r = bot - absn + 1; r <= bot; ++r) {
             blank_row(s, r);
         }
     } else {                           /* scroll down: content moves toward bot */
-        for (r = bot; r >= top + absn; --r) {
-            for (c = 0; c < (int)COLS; ++c) {
-                s->cells[r][c] = s->cells[r - absn][c];
-            }
+        if (moved_rows != 0) {
+            memmove(&s->cells[top + absn][0], &s->cells[top][0], moved_bytes);
         }
         for (r = top; r <= top + absn - 1; ++r) {
             blank_row(s, r);
@@ -122,7 +153,7 @@ static void scroll_region(screen_t *s, int top, int bot, int n)
     }
 
     for (r = top; r <= bot; ++r) {
-        s->dirty[r] = 1;
+        screen_dirty_range(s, (u8)r, 0, COLS - 1u);
     }
 }
 
@@ -169,12 +200,15 @@ void screen_ri(screen_t *s)
  * the row. */
 static void blank_cells(screen_t *s, int row, int c0, int c1)
 {
+    cell_t *cell = &s->cells[row][c0];
     int c;
+
     for (c = c0; c <= c1; ++c) {
-        s->cells[row][c].ch = BLANK_CH;
-        s->cells[row][c].attr = 0;
+        cell->ch = BLANK_CH;
+        cell->attr = 0;
+        ++cell;
     }
-    s->dirty[row] = 1;
+    screen_dirty_range(s, (u8)row, (u8)c0, (u8)c1);
 }
 
 void screen_erase_line(screen_t *s, u8 mode)
@@ -240,7 +274,7 @@ void screen_insert_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_dirty_range(s, (u8)row, (u8)cx, COLS - 1u);
 }
 
 void screen_delete_chars(screen_t *s, u8 n)
@@ -259,7 +293,7 @@ void screen_delete_chars(screen_t *s, u8 n)
         s->cells[row][c].ch = BLANK_CH;
         s->cells[row][c].attr = 0;
     }
-    s->dirty[row] = 1;
+    screen_dirty_range(s, (u8)row, (u8)cx, COLS - 1u);
 }
 
 void screen_set_attr(screen_t *s, u8 sgr)

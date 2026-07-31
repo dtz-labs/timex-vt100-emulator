@@ -102,7 +102,7 @@ static void do_backspace(screen_t *s)
     screen_cup(s, s->cy, (u8)(s->cx - 1u));
     s->cells[s->cy][s->cx].ch = BLANK_CH;
     s->cells[s->cy][s->cx].attr = 0;
-    s->dirty[s->cy] = 1;
+    screen_dirty_range(s, s->cy, s->cx, s->cx);
 }
 
 /* Translate a printable byte through the active charset. In DEC special
@@ -411,7 +411,7 @@ static void dec_alignment_test(screen_t *s)
             s->cells[r][c].ch = 'E';
             s->cells[r][c].attr = 0;
         }
-        s->dirty[r] = 1;
+        screen_dirty_range(s, r, 0, COLS - 1u);
     }
     s->attr = 0;
     s->wrap_pending = 0;

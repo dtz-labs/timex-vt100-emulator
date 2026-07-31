@@ -13,7 +13,7 @@
  *   32-byte display-file rows that hold it.
  *
  * Hardware part (ZEsarUX-tested only):
- * - render_flush(s): blit all dirty rows to display, clear dirty flags.
+ * - render_flush(s): blit dirty cell spans to display, clear dirty spans.
  * - render_cursor(s): draw/undraw cursor at current position.
  *
  * Per the toolchain rule, only the hardware functions may include z80.h.
@@ -85,9 +85,9 @@ void render_row_bytes(const u8 *g80, u8 *ev, u8 *od);
 void render_cell_bytes(u8 ch, u8 attr, u8 out[8]);
 
 /*
- * Blit all dirty rows from the screen to the hi-res display file.
- * For each dirty row, render each cell and write via hires_addr().
- * Clears dirty flags after rendering.
+ * Blit dirty spans from the screen to the hi-res display file. Narrow spans
+ * use an in-place cell repaint; wider spans use the packed full-row renderer.
+ * Clears dirty spans after rendering.
  *
  * Hardware-only: uses hires_addr() and direct memory writes.
  */
@@ -96,7 +96,7 @@ void render_flush(screen_t *s);
 /*
  * Fast hardware scroll for a full-width text-row region already reflected in
  * the screen model. Handles one text row up/down; returns non-zero if applied.
- * On success it also clears the region dirty flags because pixels were moved
+ * On success it also clears the region dirty spans because pixels were moved
  * directly in video RAM.
  */
 u8 render_scroll_region(screen_t *s, u8 top, u8 bot, s8 n);

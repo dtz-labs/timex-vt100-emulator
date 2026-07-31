@@ -7,6 +7,7 @@ import os
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ZX = "/Applications/ZEsarUX.app/Contents/MacOS/zesarux"
 TAP = os.environ.get("SMOKE_TAP", os.path.join(ROOT, "build", "term.tap"))
+MAP = os.environ.get("SMOKE_MAP", os.path.join(ROOT, "build", "term.map"))
 PORT = int(os.environ.get("ZRCP_PORT", "10001"))
 SCREENSHOT = "/tmp/smoke.pbm"
 if os.path.exists(SCREENSHOT):
@@ -70,6 +71,40 @@ def rdbytes(s, addr, n):
     return bytes.fromhex(hexline(cmd(s, "read-memory %d %d" % (addr, n))))
 
 
+def wrbytes(s, addr, data):
+    values = " ".join(str(b) for b in data)
+    cmd(s, "write-memory %d %s" % (addr, values))
+
+
+def map_symbol(name):
+    pattern = re.compile(
+        r"^_?%s\s*=\s*\$([0-9A-Fa-f]+)\b" % re.escape(name)
+    )
+    with open(MAP, "r", encoding="latin-1") as f:
+        for line in f:
+            match = pattern.match(line)
+            if match:
+                return int(match.group(1), 16)
+    raise RuntimeError("symbol not found in map: %s" % name)
+
+
+def inject(s, data, timeout=8.0):
+    len_addr = map_symbol("conn_zrcp_inject_len")
+    data_addr = map_symbol("conn_zrcp_inject_data")
+    deadline = time.monotonic() + timeout
+
+    while rdbytes(s, len_addr, 1)[0] != 0:
+        if time.monotonic() > deadline:
+            raise RuntimeError("timeout waiting for input mailbox")
+        time.sleep(0.01)
+    wrbytes(s, data_addr, data)
+    wrbytes(s, len_addr, bytes((len(data),)))
+    while rdbytes(s, len_addr, 1)[0] != 0:
+        if time.monotonic() > deadline:
+            raise RuntimeError("timeout waiting for injected input")
+        time.sleep(0.01)
+
+
 LEFT_MARGIN_PX = 16
 CELL_PX = 6
 
@@ -107,6 +142,17 @@ def cell_bytes(s, row, col):
     return bytes(out)
 
 
+def wait_cell(s, row, col, want, timeout=8.0):
+    deadline = time.monotonic() + timeout
+    got = b""
+    while time.monotonic() <= deadline:
+        got = cell_bytes(s, row, col)
+        if got == want:
+            return got
+        time.sleep(0.02)
+    return got
+
+
 try:
     time.sleep(float(os.environ.get("SMOKE_WAIT", "8")))
     s = socket.create_connection(("127.0.0.1", PORT), timeout=5)
@@ -140,6 +186,122 @@ try:
             "cell(row=%d,col=%d,%s) WANT=%s  SCREEN=%s  %s"
             % (row, col, name, want.hex(), scr.hex(), "MATCH" if match else "MISMATCH")
         )
+
+    # Exercise the single-cell repaint path at a byte-straddling column. Hide
+    # the cursor so the neighbouring-cell preservation checks read raw glyphs.
+    a_glyph = bytes([0x00, 0x70, 0x88, 0x88, 0xF8, 0x88, 0x88, 0x00])
+    blank = bytes(8)
+    inject(s, b"\x1b[?25l\x1b[17;11HA")
+    got = wait_cell(s, 16, 10, a_glyph)
+    left = cell_bytes(s, 16, 9)
+    right = cell_bytes(s, 16, 11)
+    partial_match = got == a_glyph and left == blank and right == blank
+    ok = ok and partial_match
+    print(
+        "partial-cell repaint WANT=%s SCREEN=%s neighbors=%s/%s  %s"
+        % (
+            a_glyph.hex(),
+            got.hex(),
+            left.hex(),
+            right.hex(),
+            "MATCH" if partial_match else "MISMATCH",
+        )
+    )
+
+    # Exercise a full upward scroll, including both discontinuities between
+    # the three ZX display-memory thirds (rows 8->7 and 16->15).
+    i_glyph = bytes([0x00, 0x70, 0x20, 0x20, 0x20, 0x20, 0x70, 0x00])
+    inject(s, b"\x1b[2J\x1b[9;1HI")
+    before_scroll = wait_cell(s, 8, 0, i_glyph)
+    before_match = before_scroll == i_glyph
+    ok = ok and before_match
+    print(
+        "scroll setup row=8 WANT=%s SCREEN=%s  %s"
+        % (
+            i_glyph.hex(),
+            before_scroll.hex(),
+            "MATCH" if before_match else "MISMATCH",
+        )
+    )
+    inject(s, b"\x1b[17;1HQ\x1b[24;1HX\r\n")
+    scroll_checks = (
+        ("third 1->0", 7, 8, i_glyph),
+        (
+            "third 2->1",
+            15,
+            16,
+            bytes([0x00, 0x70, 0x88, 0x88, 0xA8, 0x98, 0x70, 0x00]),
+        ),
+        (
+            "last row up",
+            22,
+            23,
+            bytes([0x00, 0x88, 0x50, 0x20, 0x20, 0x50, 0x88, 0x00]),
+        ),
+    )
+    for name, row, source_row, expected in scroll_checks:
+        # Font shapes are explicit so the check is independent of stale pixels
+        # at either the source or destination address.
+        got = wait_cell(s, row, 0, expected)
+        match = got == expected
+        ok = ok and match
+        print(
+            "scroll(row=%d,%s,from=%d) WANT=%s SCREEN=%s  %s"
+            % (
+                row,
+                name,
+                source_row,
+                expected.hex(),
+                got.hex(),
+                "MATCH" if match else "MISMATCH",
+            )
+        )
+    bottom = cell_bytes(s, 23, 0)
+    bottom_match = bottom == blank
+    ok = ok and bottom_match
+    print(
+        "scroll blank bottom WANT=%s SCREEN=%s  %s"
+        % (blank.hex(), bottom.hex(), "MATCH" if bottom_match else "MISMATCH")
+    )
+
+    # And the reverse direction: RI at the top margin scrolls down. Again put
+    # glyphs on both display-third boundaries before moving them.
+    p_glyph = bytes([0x00, 0xF0, 0x88, 0x88, 0xF0, 0x80, 0x80, 0x00])
+    inject(s, b"\x1b[2J\x1b[8;1HI\x1b[16;1HP\x1b[1;1HA")
+    setup = wait_cell(s, 15, 0, p_glyph)
+    setup_match = setup == p_glyph
+    ok = ok and setup_match
+    print(
+        "reverse-scroll setup row=15 WANT=%s SCREEN=%s  %s"
+        % (p_glyph.hex(), setup.hex(), "MATCH" if setup_match else "MISMATCH")
+    )
+    inject(s, b"\x1b[H\x1bM")
+    reverse_checks = (
+        ("first row down", 1, a_glyph),
+        ("third 0->1", 8, i_glyph),
+        ("third 1->2", 16, p_glyph),
+    )
+    for name, row, expected in reverse_checks:
+        got = wait_cell(s, row, 0, expected)
+        match = got == expected
+        ok = ok and match
+        print(
+            "reverse-scroll(row=%d,%s) WANT=%s SCREEN=%s  %s"
+            % (
+                row,
+                name,
+                expected.hex(),
+                got.hex(),
+                "MATCH" if match else "MISMATCH",
+            )
+        )
+    top = cell_bytes(s, 0, 0)
+    top_match = top == blank
+    ok = ok and top_match
+    print(
+        "reverse-scroll blank top WANT=%s SCREEN=%s  %s"
+        % (blank.hex(), top.hex(), "MATCH" if top_match else "MISMATCH")
+    )
     print()
     print("VERDICT:", "PASS - startup help rendered on TC2048" if ok else "FAIL")
     verdict_ok = ok

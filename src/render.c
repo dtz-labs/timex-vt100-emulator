@@ -109,6 +109,42 @@ static const u8 *row_glyphs[COLS];
 static u8 row_attrs[COLS];
 static u8 row_pixels[COLS];
 
+static u16 row_scanline_offset(u8 row, u8 scanline)
+{
+    u8 prow = (u8)((row << 3) + scanline);
+
+    return (u16)(((u16)(prow & 0xC0u) << 5)
+               | ((u16)(prow & 0x07u) << 8)
+               | ((u16)(prow & 0x38u) << 2));
+}
+
+/* Repaint one cell in place, preserving the neighbouring cell bits in the
+ * one or two display bytes it shares. */
+static void render_cell_fast(const screen_t *s, u8 r, u8 col)
+{
+    const cell_t *cell = &s->cells[r][col];
+    const u8 *glyph = font_glyph(cell->ch);
+    u8 byte_idx, sh, mask0, mask1;
+    u8 scanline;
+
+    render_cell_span(col, &byte_idx, &sh, &mask0, &mask1);
+    for (scanline = 0; scanline < 8u; ++scanline) {
+        u16 off = row_scanline_offset(r, scanline);
+        u8 g = glyph_row_byte(glyph, cell->attr, scanline);
+        u8 *p = (u8 *)(uintptr_t)(((byte_idx & 1u) ? HIRES_FILE1 : HIRES_FILE0)
+                                 + off + (byte_idx >> 1));
+
+        *p = (u8)((*p & (u8)~mask0) | ((g >> sh) & mask0));
+        if (mask1 != 0) {
+            u8 next_idx = (u8)(byte_idx + 1u);
+            u8 *q = (u8 *)(uintptr_t)(((next_idx & 1u) ? HIRES_FILE1 : HIRES_FILE0)
+                                     + off + (next_idx >> 1));
+            *q = (u8)((*q & (u8)~mask1)
+                    | ((g << (8u - sh)) & mask1));
+        }
+    }
+}
+
 static void render_row_fast(const screen_t *s, u8 r)
 {
     u8 *even_dst[8];
@@ -141,57 +177,86 @@ static void render_row_fast(const screen_t *s, u8 r)
 
 void render_flush(screen_t *s)
 {
-    u8 r;
+    u8 r, col;
 
     for (r = 0; r < ROWS; ++r) {
-        if (!s->dirty[r]) {
+        u8 right = s->dirty[r];
+        u8 left;
+
+        if (right == 0) {
             continue;
         }
-        render_row_fast(s, r);
+        left = s->dirty_left[r];
+        if (right > COLS || left >= right || (u8)(right - left) > 8u) {
+            render_row_fast(s, r);
+        } else {
+            for (col = left; col < right; ++col) {
+                render_cell_fast(s, r, col);
+            }
+        }
         s->dirty[r] = 0;  /* clear dirty flag */
     }
 }
 
-static u16 row_scanline_offset(u8 row, u8 scanline)
-{
-    u8 prow = (u8)((row << 3) + scanline);
-
-    return (u16)(((u16)(prow & 0xC0u) << 5)
-               | ((u16)(prow & 0x07u) << 8)
-               | ((u16)(prow & 0x38u) << 2));
-}
-
 static void scroll_file_up_one(u16 base, u8 top, u8 bot)
 {
-    u8 row, scanline;
+    u8 scanline;
 
-    for (row = top; row < bot; ++row) {
-        for (scanline = 0; scanline < 8u; ++scanline) {
+    for (scanline = 0; scanline < 8u; ++scanline) {
+        u8 row = top;
+
+        while (row < bot) {
+            u8 run = (u8)(7u - (row & 7u));
+            u8 remaining = (u8)(bot - row);
             u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(row, scanline));
             const u8 *src = (const u8 *)(uintptr_t)(base + row_scanline_offset((u8)(row + 1u), scanline));
-            memcpy(dst, src, 32u);
+
+            if (run == 0) {       /* cross a ZX display-memory third */
+                memcpy(dst, src, 32u);
+                ++row;
+                continue;
+            }
+            if (run > remaining) {
+                run = remaining;
+            }
+            memmove(dst, src, (u16)run * 32u);
+            row = (u8)(row + run);
         }
-    }
-    for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(bot, scanline));
-        memset(dst, 0, 32u);
+        memset((u8 *)(uintptr_t)(base + row_scanline_offset(bot, scanline)),
+               0, 32u);
     }
 }
 
 static void scroll_file_down_one(u16 base, u8 top, u8 bot)
 {
-    u8 row, scanline;
+    u8 scanline;
 
-    for (row = bot; row > top; --row) {
-        for (scanline = 0; scanline < 8u; ++scanline) {
+    for (scanline = 0; scanline < 8u; ++scanline) {
+        u8 row = bot;
+
+        while (row > top) {
+            u8 run = (u8)(row & 7u);
+            u8 remaining = (u8)(row - top);
             u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(row, scanline));
             const u8 *src = (const u8 *)(uintptr_t)(base + row_scanline_offset((u8)(row - 1u), scanline));
-            memcpy(dst, src, 32u);
+
+            if (run == 0) {       /* cross a ZX display-memory third */
+                memcpy(dst, src, 32u);
+                --row;
+                continue;
+            }
+            if (run > remaining) {
+                run = remaining;
+            }
+            dst = (u8 *)(uintptr_t)(base
+                    + row_scanline_offset((u8)(row - run + 1u), scanline));
+            src = (const u8 *)(uintptr_t)(base
+                    + row_scanline_offset((u8)(row - run), scanline));
+            memmove(dst, src, (u16)run * 32u);
+            row = (u8)(row - run);
         }
-    }
-    for (scanline = 0; scanline < 8u; ++scanline) {
-        u8 *dst = (u8 *)(uintptr_t)(base + row_scanline_offset(top, scanline));
-        memset(dst, 0, 32u);
+        memset((u8 *)(uintptr_t)(base + row_scanline_offset(top, scanline)),
+               0, 32u);
     }
 }
 

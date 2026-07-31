@@ -28,7 +28,43 @@ static void test_init_blanks_grid_and_homes_cursor(void)
     CHECK(s.top == 0 && s.bot == ROWS - 1);
     CHECK(s.attr == 0);
     for (r = 0; r < ROWS; ++r) {
-        CHECK(s.dirty[r] != 0);   /* a fresh screen needs painting */
+        CHECK(s.dirty_left[r] == 0);
+        CHECK(s.dirty[r] == COLS);   /* a fresh screen needs painting */
+    }
+}
+
+static void test_dirty_ranges_track_only_changed_columns(void)
+{
+    screen_t s;
+    u8 r;
+
+    screen_init(&s);
+    for (r = 0; r < ROWS; ++r) {
+        s.dirty[r] = 0;
+    }
+
+    screen_cup(&s, 4, 10);
+    screen_putc(&s, 'A');
+    CHECK(s.dirty_left[4] == 10 && s.dirty[4] == 11);
+
+    screen_putc(&s, 'B');
+    CHECK(s.dirty_left[4] == 10 && s.dirty[4] == 12);
+
+    screen_cup(&s, 4, 3);
+    screen_putc(&s, 'C');
+    CHECK(s.dirty_left[4] == 3 && s.dirty[4] == 12);
+
+    s.dirty[4] = 0;
+    screen_cup(&s, 4, 20);
+    screen_erase_line(&s, 0);
+    CHECK(s.dirty_left[4] == 20 && s.dirty[4] == COLS);
+
+    for (r = 0; r < ROWS; ++r) {
+        s.dirty[r] = 0;
+    }
+    screen_scroll(&s, 1);
+    for (r = 0; r < ROWS; ++r) {
+        CHECK(s.dirty_left[r] == 0 && s.dirty[r] == COLS);
     }
 }
 
@@ -487,6 +523,7 @@ static void test_set_scroll_region(void)
 int main(void)
 {
     test_init_blanks_grid_and_homes_cursor();
+    test_dirty_ranges_track_only_changed_columns();
     test_putc_writes_cell_and_advances();
     test_cup_sets_clamped_cursor();
     test_scroll_up_and_down_full_screen();

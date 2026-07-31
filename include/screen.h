@@ -2,8 +2,8 @@
  * screen.h -- the terminal cell-grid model (pure logic, host-tested).
  *
  * An 80x24 grid of character cells with a cursor, a scroll region, the current
- * SGR attribute, and per-row dirty flags. The VT-100 parser (vtparse) drives
- * this model; the hi-res renderer (render) blits the dirty rows. This module
+ * SGR attribute, and per-row dirty spans. The VT-100 parser (vtparse) drives
+ * this model; the hi-res renderer (render) blits the dirty columns. This module
  * knows nothing about hardware, escape sequences, or pixels -- it is the single
  * source of truth for "what the screen should show". (Design D3.)
  *
@@ -43,7 +43,11 @@ typedef struct {
     u8 cx, cy;        /* cursor column (0..COLS-1), row (0..ROWS-1) */
     u8 top, bot;      /* scroll region: rows [top..bot] inclusive    */
     u8 attr;          /* current SGR attribute, copied into cells on putc */
-    u8 dirty[ROWS];   /* per-row dirty flag: non-zero => needs repaint    */
+    /* Dirty span per row. dirty[] is the exclusive right edge (zero means
+     * clean); dirty_left[] is the inclusive left edge. This keeps one- and
+     * two-character input from forcing an 80-cell repaint. */
+    u8 dirty[ROWS];
+    u8 dirty_left[ROWS];
     u8 saved_cx, saved_cy, saved_attr;  /* DECSC/DECRC saved cursor + SGR */
     u8 mode;          /* MODE_* bits                                      */
     u8 wrap_pending;  /* VT-100 deferred wrap: last column written, awaiting */
@@ -53,12 +57,15 @@ typedef struct {
 } screen_t;
 
 /* Reset to a blank screen: every cell a space with no attributes, cursor home,
- * scroll region the full screen, current attribute cleared, all rows marked
- * dirty (a fresh screen must be painted once). */
+ * scroll region the full screen, current attribute cleared, and every row's
+ * full column span marked dirty (a fresh screen must be painted once). */
 void screen_init(screen_t *s);
 
+/* Extend one row's dirty span to include [first..last], both inclusive. */
+void screen_dirty_range(screen_t *s, u8 row, u8 first, u8 last);
+
 /* Write one printable character at the cursor using the current attribute,
- * mark the cursor's row dirty, and advance the cursor one column. In the last
+ * mark the cursor cell dirty, and advance the cursor one column. In the last
  * column the cursor parks: with MODE_AUTOWRAP the wrap is deferred (VT-100
  * style) and fires on the next printable (CR+LF, scrolling at the region
  * bottom); without it the cell is overwritten in place. Any explicit cursor

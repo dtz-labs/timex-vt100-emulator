@@ -81,12 +81,14 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
     u8 n;
     u8 i;
     u8 changed = 0;
+    u8 cursor_erased = 0;
     u8 old_scroll_seq;
 
     do {
         n = conn_rx_read(buf, (u8)(sizeof buf));
-        if (n != 0) {
-            scr->dirty[scr->cy] = 1;  /* erase the previously rendered cursor */
+        if (n != 0 && !cursor_erased) {
+            render_cursor(scr);       /* XOR away the previously drawn cursor */
+            cursor_erased = 1;
         }
         for (i = 0; i < n; ++i) {
             if (buf[i] == '\n' || (scr->wrap_pending && buf[i] >= 0x20u)) {
@@ -107,7 +109,6 @@ static u8 pump_conn(vtparse_t *vt, screen_t *scr)
             pump_vt_replies(vt);
         }
         if (n != 0) {
-            scr->dirty[scr->cy] = 1;  /* draw the cursor at its new position */
             changed = 1;
         }
     } while (n != 0);
