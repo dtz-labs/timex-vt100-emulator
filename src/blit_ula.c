@@ -199,16 +199,55 @@ void blit_flush(screen_t *s)
  * This is the SAME expression ula_row_scanline_offset() (src/ula.c) and
  * ula_addr() use, single-sourced in ula.h, so there is no longer a second
  * copy to keep in sync.
+ *
+ * RUN COALESCING. ULA_THIRDS_OFFSET() decomposes a pixel row as
+ *
+ *     offset = third * 2048 + scanline * 256 + row_in_third * 32
+ *
+ * so at a FIXED third and scanline the eight text rows are 32 bytes apart in
+ * one contiguous 256-byte block. Scrolling by one row within a third is
+ * therefore a single overlapping move of that block, not eight separate
+ * 32-byte copies: the loop below walks scanline-major and coalesces each
+ * maximal run of rows sharing a third.
+ *
+ * The saving is call and address-computation overhead, not copy speed --
+ * LDIR is LDIR either way. A full 24-row region drops from 192 memcpy(32)
+ * calls (each preceded by two ULA_THIRDS_OFFSET evaluations) to ~24 memmove
+ * calls plus the boundary memcpys, which is where scroll_vram's cost
+ * actually lived. Recommendation 5 of
+ * docs/superpowers/reviews/2026-07-26-perf-review.md; measurements in
+ * docs/perf/benchmarks.md, "Scroll run coalescing".
  */
 static void scroll_up_one(u8 top, u8 bot)
 {
-    u8 row, scanline;
+    u8 scanline;
 
-    for (row = top; row < bot; ++row) {
-        for (scanline = 0; scanline < 8u; ++scanline) {
+    for (scanline = 0; scanline < 8u; ++scanline) {
+        u8 row = top;
+
+        while (row < bot) {
+            /* Rows sharing a third and a scanline are a contiguous run (see
+             * the RUN COALESCING note above), so the whole run moves in one
+             * memmove instead of `run` separate 32-byte copies. */
+            u8 run = (u8)(7u - (row & 7u));
+            u8 remaining = (u8)(bot - row);
             u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((row << 3) + scanline)));
             const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row + 1u) << 3) + scanline)));
-            memcpy(dst, src, 32u);
+
+            if (run == 0u) {
+                /* Last row of a third: its source lives in the NEXT third,
+                 * 1,824 bytes away, so this one row cannot join a run. */
+                memcpy(dst, src, 32u);
+                ++row;
+                continue;
+            }
+            if (run > remaining) {
+                run = remaining;   /* the region ends before the third does */
+            }
+            /* Overlapping by 32 bytes with dst < src: memmove copies forward
+             * (LDIR), which is exactly the direction this needs. */
+            memmove(dst, src, (u16)run * 32u);
+            row = (u8)(row + run);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
@@ -219,13 +258,37 @@ static void scroll_up_one(u8 top, u8 bot)
 
 static void scroll_down_one(u8 top, u8 bot)
 {
-    u8 row, scanline;
+    u8 scanline;
 
-    for (row = bot; row > top; --row) {
-        for (scanline = 0; scanline < 8u; ++scanline) {
-            u8 *dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((row << 3) + scanline)));
-            const u8 *src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row - 1u) << 3) + scanline)));
-            memcpy(dst, src, 32u);
+    for (scanline = 0; scanline < 8u; ++scanline) {
+        u8 row = bot;
+
+        while (row > top) {
+            u8 run = (u8)(row & 7u);
+            u8 remaining = (u8)(row - top);
+            u8 *dst;
+            const u8 *src;
+
+            if (run == 0u) {
+                /* First row of a third: its source lives in the PREVIOUS
+                 * third, so this one row cannot join a run. */
+                dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)((row << 3) + scanline)));
+                src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row - 1u) << 3) + scanline)));
+                memcpy(dst, src, 32u);
+                --row;
+                continue;
+            }
+            if (run > remaining) {
+                run = remaining;   /* the region ends before the third does */
+            }
+            /* Move rows [row-run+1 .. row] from [row-run .. row-1]: address
+             * the run from its LOW end, since memmove takes the start of the
+             * block, not the end. dst > src here, so memmove copies backward
+             * (LDDR). */
+            dst = (u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row - run + 1u) << 3) + scanline)));
+            src = (const u8 *)(uintptr_t)(ULA_FILE + ULA_THIRDS_OFFSET((u8)(((row - run) << 3) + scanline)));
+            memmove(dst, src, (u16)run * 32u);
+            row = (u8)(row - run);
         }
     }
     for (scanline = 0; scanline < 8u; ++scanline) {
