@@ -1,8 +1,8 @@
 # Bidirectional audio link (ZX ↔ PC) — Design
 
 Date: 2026-08-02
-Status: **D1 open** — awaiting a decision on the downstream physical layer.
-Everything else is settled.
+Status: approved design, implementation pending. D1 decided 2026-08-03:
+**Option C**, our own EAR decoder at ROM bit timings.
 Issue: #5
 
 ## Purpose
@@ -47,9 +47,14 @@ re-litigation:
   mandatory — without it a truncated CRC turns every upstream frame into a
   retransmission.
 
-## D1 (OPEN): the downstream physical layer
+## D1 (DECIDED): the downstream physical layer
 
-### Why this is open
+**Decision (2026-08-03): Option C — our own EAR decoder at ROM bit timings.**
+The reasoning that led here is kept in full below, because the first revision
+of this document reached the opposite conclusion from a fabricated number and
+that failure is worth keeping visible.
+
+### Why this was reopened
 
 An earlier revision of this design claimed the ROM's `LD-LEADER` locks after
 **256 pilot pulses**, and concluded that shortening the generated pilot from
@@ -145,8 +150,11 @@ The recommendation is therefore: **own decoder, ROM bit rate.** ~300 bytes of
 Z80, 77 B/s, a responsive keyboard and no ROM dependence — against ~50 bytes,
 51 B/s, a keyboard deaf most of the time, and a build pinned to one ROM.
 
-**This reverses an earlier answer that was given on false information, so it
-needs an explicit decision before planning proceeds.**
+This reversed an earlier answer that had been given on false information, so
+it was put back to an explicit decision rather than resolved unilaterally.
+**Accepted 2026-08-03.**
+
+Everything below is written against Option C.
 
 ## Decisions (settled)
 
@@ -188,7 +196,7 @@ PR A is deterministic and host-testable; PR B needs an emulator and signal
 analysis. Combined, a failing end-to-end run would not say whether the
 protocol or the signal was at fault.
 
-**D1 only affects PR B.** PR A can be planned and built while D1 is open.
+**D1 only affects PR B**, so PR A stayed plannable while it was open.
 
 ### D5: Both targets get the backend
 
