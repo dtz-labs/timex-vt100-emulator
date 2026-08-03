@@ -116,9 +116,9 @@ the all-ones worst case is ~33% higher and is absorbed by `T_RESP`.
 | Frame on the wire | fixed 70 B = 0.410 s | fixed 70 B = 0.410 s | variable, 4–68 B |
 | `t_dn`, full payload | **1.835 s** | **0.844 s** | **0.427 s** |
 | `t_dn`, empty poll | 1.835 s | 0.844 s | **0.051 s** |
-| Transaction, no render | 2.25 s | 1.26 s | **0.60 s** |
-| Throughput, no scrolling | 28 B/s | 51 B/s | **106 B/s** |
-| Idle deafness | ~184% | 84% | **23%** |
+| Transaction, no render | 2.25 s | 1.26 s | **0.48 s** |
+| Throughput, no scrolling | 28 B/s | 51 B/s | **134 B/s** |
+| Idle deafness | ~184% | 84% | **10%** |
 | Z80 code | ~30 B | ~50 B | ~300 B |
 | Machines | standard Sinclair ROM only | standard Sinclair ROM only, **and its internal addresses** | **any** |
 
@@ -261,7 +261,7 @@ margin, plus a two-pulse sync pair and a closing edge.
 | Constant | Side | Value | Derivation |
 |---|---|---:|---|
 | `t_dn` full / poll | — | **0.427 / 0.051 s** | 48-pulse preamble + sync + 68 / 4 B + closing edge |
-| `t_up` full / poll | — | **0.552 / 0.176 s** | same, plus the 32-byte leadout |
+| `t_up` full / poll | — | **0.427 / 0.051 s** | same encoding; leadout measured unnecessary |
 | `t_render` | — | 8.35 s | 64 scrolls × 456,411 T (Timex worst case) |
 | `T_RESP` | PC | **10 s** | `t_turn + t_render + t_up + margin` |
 | `RETRIES` | PC | 3 | from spec |
@@ -270,30 +270,25 @@ margin, plus a two-pulse sync pair and a closing edge.
 | `T_HELLO_RETRY` | PC | 2.0 s | from spec |
 | `T_DEAD` | ZX | **35 s** | `> RETRIES × (t_dn + T_RESP)` = 31.3 s |
 
-**The leadout costs 0.125 s on every upstream frame** — it is 32 bytes of
-padding at the same bit rate as data, and it is paid whether the response
-carries keystrokes or not. That is 21% of a typical transaction and it is the
-single largest avoidable cost in the link.
+**The leadout was measured and dropped (2026-08-03).** It cost 0.125 s on
+every upstream frame — 21% of a transaction, and the single largest avoidable
+cost in the link.
 
-Whether it is needed at all is an open empirical question, scheduled for
-measurement in PR B Task 2 rather than assumed either way. The proof of
-concept added it because capture truncated the tail of a transmission by 8–16
-bytes; but that observation may belong to its earlier Loopback attempts rather
-than the `--aofile` path, and our frames end by **length** rather than by
-silence, so a decoder stops needing input the moment `LEN + 4` bytes have
-arrived. If `--aofile` proves not to truncate, dropping the leadout takes
-downstream throughput from 106 to 134 B/s and idle deafness from 23% to 10%.
+Measured against real `--aofile` captures from the Z80 transmitter:
+**98/98 frames decoded with the leadout, 234/234 without it**, in the same
+amount of audio. Nothing truncates on this path. The proof of concept's
+8–16-byte truncation belongs to its earlier Loopback attempts, not to the
+`--aofile` dump — and our frames end by **length** rather than by silence, so
+a decoder stops needing input the moment `LEN + 4` bytes have arrived. The
+leadout could not have helped even if something did truncate.
 
-`t_render` is measured, not estimated. One scrolled row costs
-101,508 + 354,903 = **456,411 T (0.130 s)** on the Timex hi-res build and
-53,808 + 174,893 = **228,701 T (0.065 s)** on the ZX ULA build, after PR #9.
-Before PR #9 those were 666,570 T and 319,389 T, giving `t_render` = 12.2 s
-and `T_RESP` = 14 s.
+`ALINK_PHY_LEADOUT` is 0. The constant remains so it can be raised if
+real-hardware capture, as opposed to the emulator dump, ever proves to
+truncate.
 
-`T_RESP` costs nothing on a healthy link — it is a timeout, not a delay, and
-the master proceeds the moment a response arrives. It is paid only for a
-genuinely lost frame. The real cost is `T_DEAD`: after the link physically
-breaks, "NO CARRIER" appears after about half a minute.
+With it gone, `t_up` equals `t_dn`: **0.427 s** for a full frame and
+**0.051 s** for an empty poll. Downstream throughput is **134 B/s** and idle
+deafness **10%**.
 
 ### D7: Throughput is bounded by scrolling, not by audio
 
@@ -303,8 +298,8 @@ transaction time directly.
 
 | Traffic | Timex 80 col. | ZX 40 col. |
 |---|---:|---:|
-| Text that does not scroll | **106 B/s** | 106 B/s |
-| Scrolling output (9 newlines per 64 B chunk) | **36 B/s** | **54 B/s** |
+| Text that does not scroll | **134 B/s** | 134 B/s |
+| Scrolling output (9 newlines per 64 B chunk) | **39 B/s** | **60 B/s** |
 
 A 64-byte chunk of ordinary shell output carries 8–10 newlines, costing about
 1.17 s of rendering on the Timex and 0.59 s on the ZX. The audio layer is not

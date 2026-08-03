@@ -227,6 +227,21 @@ class PulseDecoder:
             return
 
         if self.state == "pilot":
+            # Markedly LONGER than the locked pilot means the lock was wrong:
+            # start over with this width as the new candidate.
+            #
+            # This is not hypothetical. A 32-byte leadout is 512 identical
+            # half-pulses, which is a textbook false preamble -- the lock
+            # takes it, and then nothing can dislodge it, because the sync
+            # test below only ever looks for something SHORTER. The real
+            # preamble that follows is longer, so it never matches; the data
+            # after it is longer too. The decoder would sit locked on the
+            # leadout forever, silent, with a perfectly good signal arriving.
+            if width > 1.3 * self.pilot:
+                self.state = "idle"
+                self.pilot = float(width)
+                self.pilot_count = 1
+                return
             # Markedly shorter than the pilot: either SYNC1, or edge ringing
             # splitting a pilot pulse. The next widths decide.
             if width < 0.7 * self.pilot:
