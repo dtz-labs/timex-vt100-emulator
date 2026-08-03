@@ -54,6 +54,9 @@ $CC $CFLAGS "$ROOT/test/test_font.c" "$ROOT/src/font.c" -o "$OUT/test_font"
 $CC $CFLAGS "$ROOT/test/test_alink_frame.c" "$ROOT/src/alink_frame.c" -o "$OUT/test_alink_frame"
 "$OUT/test_alink_frame"
 
+$CC $CFLAGS "$ROOT/test/test_alink_slave.c" "$ROOT/src/alink_slave.c" "$ROOT/src/alink_frame.c" -o "$OUT/test_alink_slave"
+"$OUT/test_alink_slave"
+
 $CC $CFLAGS "$ROOT/test/test_conn.c" "$ROOT/src/conn.c" -o "$OUT/test_conn"
 "$OUT/test_conn"
 
