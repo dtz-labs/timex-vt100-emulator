@@ -366,6 +366,35 @@ Optional:
 make bridge-if1 SERIAL=/dev/cu.usbserial-0001 SERIAL_BAUD=9600 SERIAL_TERM=timex-vt102 SERIAL_CMD='ssh user@host'
 ```
 
+## Audio Link (in progress)
+
+A third connection backend that carries the terminal's byte streams over plain
+audio — the EAR and MIC sockets on real hardware, a virtual audio device and
+ZEsarUX's `--aofile` dump under emulation. Issue #5.
+
+The protocol engine is done and tested: framing with CRC-16, `HELLO`/`WELCOME`
+negotiation and stop-and-wait ARQ, implemented independently in C (for the Z80)
+and Python (for the PC), and cross-checked against each other over a pipe.
+
+```sh
+python3 test/test_alink_xcheck.py    # Python master vs. the compiled C slave
+```
+
+The physical layer — the EAR decoder, the MIC send loop and the pulse
+encoder/decoder — is not written yet, so the terminal cannot yet speak over
+audio.
+
+The audio path itself can be built and verified today, and doing so is the one
+manual, one-off part of the feature:
+
+**[Audio Link — Setup and Verification](docs/audio-link-setup.md)** — which
+virtual audio device to use (and why BlackHole failed in the proof of
+concept's environment), how to create and test it, why the two directions use
+different plumbing, and troubleshooting.
+
+Design and the reasoning behind the physical-layer choice:
+[the audio link design](docs/superpowers/specs/2026-08-02-audio-link-design.md).
+
 ## Test
 
 Host tests:
