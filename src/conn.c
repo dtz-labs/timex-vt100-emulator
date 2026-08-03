@@ -7,6 +7,11 @@
  */
 #include "conn.h"
 
+#ifdef CONN_BACKEND_AUDIO
+#include "alink.h"
+#include "alink_phy.h"
+#endif
+
 #ifdef CONN_BACKEND_IF1
 #include <z80.h>
 
@@ -89,7 +94,25 @@ static conn_ring_t rx_ring = { rx_buf, CONN_BUF_SIZE, 0, 0, 0 };
 static conn_ring_t tx_ring = { tx_buf, CONN_BUF_SIZE, 0, 0, 0 };
 static u8 conn_flags;
 
-#ifndef CONN_BACKEND_IF1
+#ifdef CONN_BACKEND_AUDIO
+/*
+ * File scope, not locals. A previous version of this project put a 3,840-byte
+ * screen_t on the Z80 stack and it overflowed into the IM2 vector table; the
+ * rule since then is that anything this size lives in BSS. See include/im2.h.
+ */
+static alink_slave_t audio_slave;
+static alink_frame_t audio_resp;
+/*
+ * One buffer, three uses, because the link is half duplex and they never
+ * overlap: a frame is fully received and consumed before the response is
+ * built, and the upstream payload is staged out of the ring only after the
+ * received payload has already been copied into rx_ring. On the Timex build
+ * this saves 132 bytes of an image that has under 1,800 to spare.
+ */
+static u8 audio_block[ALINK_FRAME_MAX];
+#endif
+
+#if !defined(CONN_BACKEND_IF1) && !defined(CONN_BACKEND_AUDIO)
 volatile u8 conn_zrcp_bridge_flags;
 volatile u8 conn_zrcp_inject_len;
 volatile u8 conn_zrcp_inject_data[CONN_ZRCP_INJECT_MAX];
@@ -200,7 +223,7 @@ static void ring_drop_one(conn_ring_t *r)
     }
 }
 
-#ifndef CONN_BACKEND_IF1
+#if !defined(CONN_BACKEND_IF1) && !defined(CONN_BACKEND_AUDIO)
 static void poll_zrcp_inject(void)
 {
     u8 i;
@@ -293,7 +316,10 @@ void conn_init(void)
     ring_reset(&tx_ring);
     conn_flags = 0;
 
-#ifdef CONN_BACKEND_IF1
+#ifdef CONN_BACKEND_AUDIO
+    alink_slave_init(&audio_slave);
+    alink_phy_init();
+#elif defined(CONN_BACKEND_IF1)
     if1_ready = 0;
     if (if1_create_sysvars() != RS_ERR_OK) {
         conn_flags |= CONN_STATUS_INIT_ERROR;
@@ -312,7 +338,56 @@ void conn_init(void)
 
 void conn_poll(void)
 {
-#ifdef CONN_BACKEND_IF1
+#ifdef CONN_BACKEND_AUDIO
+    alink_rx_t rx;
+    u8 n;
+
+    /*
+     * The order here is fixed by the protocol and documented in alink.h:
+     * feed, deliver, top up, respond. The slave must consume a payload BEFORE
+     * replying -- that is the flow-control mechanism -- and topping the
+     * upstream slot up between the two is what lets a payload the master just
+     * acknowledged be refilled without wasting a round trip.
+     */
+    if (!alink_phy_carrier()) {
+        return;                     /* line idle; interrupts stayed enabled */
+    }
+    n = alink_phy_receive(audio_block, (u8)(sizeof audio_block));
+    if (n == 0) {
+        return;                     /* noise, or a frame that stopped short */
+    }
+
+    alink_slave_feed(&audio_slave, audio_block, n, &rx);
+
+    if (rx.deliver_len != 0) {
+        if (ring_space(&rx_ring) < rx.deliver_len) {
+            conn_flags |= CONN_STATUS_RX_OVERFLOW;
+        } else {
+            ring_write(&rx_ring, alink_slave_rx_payload(&audio_slave),
+                       rx.deliver_len);
+        }
+    }
+    if (rx.carrier_lost) {
+        conn_flags |= CONN_STATUS_CARRIER_LOST;
+    }
+
+    if (tx_ring.used != 0 && alink_slave_tx_ready(&audio_slave)) {
+        n = tx_ring.used;
+        if (n > ALINK_MAX_PAYLOAD) {
+            n = ALINK_MAX_PAYLOAD;
+        }
+        n = ring_read(&tx_ring, audio_block, n);
+        alink_slave_tx_set(&audio_slave, audio_block, n);
+    }
+
+    if (rx.respond) {
+        alink_slave_response(&audio_slave, &audio_resp);
+        n = alink_frame_encode(&audio_resp, audio_block);
+        if (n != 0) {
+            alink_phy_send(audio_block, n);
+        }
+    }
+#elif defined(CONN_BACKEND_IF1)
     u8 i;
     u8 b;
     u8 status;

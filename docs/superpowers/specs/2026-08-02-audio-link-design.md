@@ -39,13 +39,16 @@ re-litigation:
   must be `--aofile`, a raw dump written synchronously with emulation.
 - **The Mac→ZX direction works** through the PoC pipeline: encoder → ffmpeg →
   Loopback virtual device named `ZX Link` → ZEsarUX External Audio Source.
-- **Capture truncates the tail of a transmission** by 8–16 bytes. The ZX→Mac
-  PoC pads every transmission with `LEADOUT_SIZE = 32` zero bytes after its
-  checksum so that whatever gets cut is padding, never data
-  (`zx_audio_link_tx.py:30–33, 263–275`). Our upstream frames carry their CRC
-  at the end and are directly exposed to this, so the same 32-byte leadout is
-  mandatory — without it a truncated CRC turns every upstream frame into a
-  retransmission.
+- **Capture truncates the tail of a transmission** by 8–16 bytes, so the ZX→Mac
+  PoC pads every transmission with `LEADOUT_SIZE = 32` zero bytes
+  (`zx_audio_link_tx.py:30–33, 263–275`).
+
+  **Measured and not adopted.** This is the one PoC finding that did not
+  survive contact with our own capture: 98/98 frames decoded with a leadout
+  and 234/234 without it, from real `--aofile` dumps of the Z80 transmitter.
+  Nothing truncates on this path — the PoC's observation belongs to its
+  earlier Loopback attempts. Our frames also end by **length** rather than by
+  silence, so the frame is complete before a leadout would even begin. See D6.
 
 ## D1 (DECIDED): the downstream physical layer
 
@@ -107,13 +110,13 @@ the all-ones worst case is ~33% higher and is absorbed by `T_RESP`.
 
 | | **A: stock `CALL 0x0556`** | **B: enter past `LD-WAIT`** | **C: own EAR decoder** |
 |---|---|---|---|
-| Pilot / preamble | 2,300 pulses = 1.425 s | 700 pulses = 0.434 s | 15 ms |
+| Pilot / preamble | 2,300 pulses = 1.425 s | 700 pulses = 0.434 s | 48 pulses = 29.7 ms |
 | Frame on the wire | fixed 70 B = 0.410 s | fixed 70 B = 0.410 s | variable, 4–68 B |
-| `t_dn`, full payload | **1.835 s** | **0.844 s** | **0.414 s** |
-| `t_dn`, empty poll | 1.835 s | 0.844 s | **0.038 s** |
-| Transaction, no render | 2.25 s | 1.26 s | **0.83 s** |
-| Throughput, no scrolling | 28 B/s | 51 B/s | **77 B/s** |
-| Idle deafness | ~100% | 84% | **~4%** |
+| `t_dn`, full payload | **1.835 s** | **0.844 s** | **0.427 s** |
+| `t_dn`, empty poll | 1.835 s | 0.844 s | **0.051 s** |
+| Transaction, no render | 2.25 s | 1.26 s | **0.48 s** |
+| Throughput, no scrolling | 28 B/s | 51 B/s | **134 B/s** |
+| Idle deafness | ~184% | 84% | **10%** |
 | Z80 code | ~30 B | ~50 B | ~300 B |
 | Machines | standard Sinclair ROM only | standard Sinclair ROM only, **and its internal addresses** | **any** |
 
@@ -131,7 +134,7 @@ second.
 
 **Option C** decodes EAR ourselves and uses the ROM for nothing. It is the
 only option that can read a variable-length frame, so an idle poll costs
-0.038 s instead of 0.844 s — which is what makes the keyboard usable at all.
+0.051 s instead of 0.844 s — which is what makes the keyboard usable at all.
 It is also the only one that works on a TS2068, whose Timex ROM has none of
 these routines at these addresses.
 
@@ -147,7 +150,7 @@ Turbo timings remain available later as a pure physical-layer change with no
 protocol impact.
 
 The recommendation is therefore: **own decoder, ROM bit rate.** ~300 bytes of
-Z80, 77 B/s, a responsive keyboard and no ROM dependence — against ~50 bytes,
+Z80, 134 B/s, a responsive keyboard and no ROM dependence — against ~50 bytes,
 51 B/s, a keyboard deaf most of the time, and a build pinned to one ROM.
 
 This reversed an earlier answer that had been given on false information, so
@@ -156,21 +159,58 @@ it was put back to an explicit decision rather than resolved unilaterally.
 
 Everything below is written against Option C.
 
+### The wire format, as implemented
+
+```
+[48 x pilot 2168 T] [sync 667 T] [sync 735 T] [CTRL LEN PAYLOAD CRC] [leadout] [closing edge]
+```
+
+Data is MSB first, one bit per pair of equal half-pulses: 855 T for a 0, 1710 T
+for a 1 — the ROM's own bit timings, which is what keeps the Z80 side a simple
+edge-timing loop rather than a cycle-counted turbo decoder.
+
+Three details emerged from implementing the codec (PR B Task 1) rather than
+from designing it, and all three are consequences of shortening the preamble
+by a factor of 67. They are recorded here because they bind **both** sides:
+
+1. **A frame ends by length, not by silence.** Once `LEN` is decoded the
+   receiver knows exactly how many bytes remain. The proof of concept cut on a
+   gap, which works for its fixed 64-byte payload but would never separate two
+   back-to-back blocks, since the second block's preamble follows the first
+   immediately.
+2. **The transmitter must emit a closing edge** after its last half-pulse. A
+   receiver measures a half-pulse *between two edges*, so the final one has no
+   width until something ends it — without the closing edge the last bit never
+   completes and the frame is never delivered.
+3. **The receiver's DC estimate must settle inside the preamble.** The proof
+   of concept tracked DC with a 41 ms time constant, having 1.99 s of pilot to
+   converge in. At 29.7 ms that estimate is still far off when data starts, and
+   on an 8-bit dump with a large DC offset both halves of the signal then land
+   on the same side of the threshold and no edge is ever seen.
+
 ## Decisions (settled)
 
-### D2: Carrier detection, and why it matters less under Option C
+### D2: Carrier detection, and what actually keeps the keyboard alive
 
 Under A or B, `LD-BYTES` blocks indefinitely and executes `DI`, so a ~30-byte
 carrier detector (poll port `0xFE` bit 6 for edges at pilot rate) is
 mandatory just to keep the keyboard alive between frames.
 
-Under C the detector is part of the decoder's idle loop, which alternates
-between watching EAR for a preamble and scanning the keyboard, and the deaf
-window shrinks to the frame's own air time.
+Under C the detector is a cheap call in the main loop, and the deaf window
+shrinks to the frame's own air time.
 
-Either way, keyboard scanning stops while a frame is being received: sampling
-EAR cannot be interleaved with reading the key matrix without destroying bit
-timing. That is a property of the medium, not of the design.
+**Correction (2026-08-03).** An earlier revision said the idle loop
+"alternates between watching EAR for a preamble and scanning the keyboard".
+It does not, and it does not need to. The keyboard is scanned inside the IM2
+interrupt handler at 50 Hz — `keyboard_im2_isr` → `keyboard_frame_tick` →
+`keymap_poll` → `keybuf` (`src/main.c`) — entirely independently of the main
+loop, which only drains `keybuf` into `conn`. So while idle the design simply
+leaves interrupts **enabled** and the keyboard costs nothing.
+
+`DI` is needed only for the duration of one frame's reception or
+transmission, because sampling EAR cannot be interleaved with anything
+without destroying bit timing. That handler does not chain to the ROM, so
+nothing else depends on the interrupts missed during a frame.
 
 ### D3: Full protocol v1, no reduced first cut
 
@@ -210,28 +250,43 @@ Derived from this project's measured benchmarks, assuming Option C and
 assuming **PR #9 (scroll run coalescing) has landed** — it changes `t_render`
 by a third.
 
+**These are measured, not estimated** — computed by summing the pulse widths
+`tools/alink/phy.py` actually emits, and pinned by a test
+(`test_air_time_matches_the_design`). An earlier revision assumed a 15 ms
+preamble; the implementation uses 48 pilot pulses (29.7 ms) for detection
+margin, plus a two-pulse sync pair and a closing edge.
+
 | Constant | Side | Value | Derivation |
 |---|---|---:|---|
-| `t_dn` full / poll | — | 0.414 / 0.038 s | 15 ms preamble + 68 / 4 B |
-| `t_up` full / poll | — | 0.414 / 0.038 s | same encoding, plus 32 B leadout |
+| `t_dn` full / poll | — | **0.427 / 0.051 s** | 48-pulse preamble + sync + 68 / 4 B + closing edge |
+| `t_up` full / poll | — | **0.427 / 0.051 s** | same encoding; leadout measured unnecessary |
 | `t_render` | — | 8.35 s | 64 scrolls × 456,411 T (Timex worst case) |
 | `T_RESP` | PC | **10 s** | `t_turn + t_render + t_up + margin` |
 | `RETRIES` | PC | 3 | from spec |
 | `T_POLL_ACTIVE` | PC | 0 ms | from spec |
 | `T_POLL_IDLE` | PC | 1.0 s | from spec |
 | `T_HELLO_RETRY` | PC | 2.0 s | from spec |
-| `T_DEAD` | ZX | **35 s** | `> RETRIES × (t_dn + T_RESP)` = 31.2 s |
+| `T_DEAD` | ZX | **35 s** | `> RETRIES × (t_dn + T_RESP)` = 31.3 s |
 
-`t_render` is measured, not estimated. One scrolled row costs
-101,508 + 354,903 = **456,411 T (0.130 s)** on the Timex hi-res build and
-53,808 + 174,893 = **228,701 T (0.065 s)** on the ZX ULA build, after PR #9.
-Before PR #9 those were 666,570 T and 319,389 T, giving `t_render` = 12.2 s
-and `T_RESP` = 14 s.
+**The leadout was measured and dropped (2026-08-03).** It cost 0.125 s on
+every upstream frame — 21% of a transaction, and the single largest avoidable
+cost in the link.
 
-`T_RESP` costs nothing on a healthy link — it is a timeout, not a delay, and
-the master proceeds the moment a response arrives. It is paid only for a
-genuinely lost frame. The real cost is `T_DEAD`: after the link physically
-breaks, "NO CARRIER" appears after about half a minute.
+Measured against real `--aofile` captures from the Z80 transmitter:
+**98/98 frames decoded with the leadout, 234/234 without it**, in the same
+amount of audio. Nothing truncates on this path. The proof of concept's
+8–16-byte truncation belongs to its earlier Loopback attempts, not to the
+`--aofile` dump — and our frames end by **length** rather than by silence, so
+a decoder stops needing input the moment `LEN + 4` bytes have arrived. The
+leadout could not have helped even if something did truncate.
+
+`ALINK_PHY_LEADOUT` is 0. The constant remains so it can be raised if
+real-hardware capture, as opposed to the emulator dump, ever proves to
+truncate.
+
+With it gone, `t_up` equals `t_dn`: **0.427 s** for a full frame and
+**0.051 s** for an empty poll. Downstream throughput is **134 B/s** and idle
+deafness **10%**.
 
 ### D7: Throughput is bounded by scrolling, not by audio
 
@@ -241,12 +296,25 @@ transaction time directly.
 
 | Traffic | Timex 80 col. | ZX 40 col. |
 |---|---:|---:|
-| Text that does not scroll | ~77 B/s | ~77 B/s |
-| Scrolling output (8–10 newlines per 64 B chunk) | ~32 B/s | ~45 B/s |
+| Text that does not scroll | **134 B/s** | 134 B/s |
+| Scrolling output (9 newlines per 64 B chunk) | **39 B/s** | **60 B/s** |
 
 A 64-byte chunk of ordinary shell output carries 8–10 newlines, costing about
 1.17 s of rendering on the Timex and 0.59 s on the ZX. The audio layer is not
 the bottleneck for real traffic; `blit_scroll_region()` is.
+
+**Corrected 2026-08-03.** An earlier revision said 77 / 32 / 45 B/s. Those
+were wrong in both directions at once, which is worth recording:
+
+- **Too pessimistic on throughput.** They assumed both directions carry a full
+  64-byte payload. In practice the upstream frame is almost always empty — the
+  user is reading, not typing — so the transaction is a full downstream frame
+  plus an empty response, not two full frames.
+- **Too optimistic on idle responsiveness.** They put idle deafness at ~4%,
+  counting only the downstream poll. The slave is equally deaf while
+  *transmitting* its own response, and with the leadout that response is the
+  expensive half. The real figure is **23%** of an idle second, or 10% without
+  the leadout.
 
 Perf-review recommendation 5 has now been implemented (PR #9, `scroll_vram`
 −37.2% Timex / −34.1% ZX), which is where the figures above come from. Before
@@ -266,7 +334,7 @@ PC (master)                                      ZX / Timex (slave)
 │        ↕                   │                  │        ↕                     │
 │ frame codec + CRC-16       │                  │ frame codec + CRC-16         │
 │        ↕                   │                  │        ↕                     │
-│ pulse encoder ─────────────┼──── EAR ─────────┤ EAR decoder (idle: keyboard) │
+│ pulse encoder ─────────────┼──── EAR ─────────┤ EAR decoder (IRQ: keyboard)  │
 │ pulse decoder ←────────────┼──── MIC ─────────┤ MIC send loop (+32 B leadout)│
 └────────────────────────────┘                  └──────────────────────────────┘
       encoder → ffmpeg → Loopback "ZX Link" → ZEsarUX External Audio Source
@@ -304,7 +372,7 @@ files rather than growing a file that already carries two backends.
 
 `phy.py` cannot reuse the PoC decoder unchanged. `TapeDecoder.PILOT_LOCK`
 requires 256 stable half-pulses before it enters the pilot state — ≈159 ms at
-2,168 T per pulse, more than ten times a 15 ms preamble. Pilot lock also
+2,168 T per pulse, more than five times our 29.7 ms preamble. Pilot lock also
 seeds the decoder's adaptive width and threshold tracking, so shortening it
 means reworking that seeding, not just lowering a constant.
 
@@ -328,14 +396,15 @@ require the ZRCP backend to be compiled out — which it replaces anyway.
 ## Data flow
 
 1. The master reads pty output and forms a `LINK` frame of 4–68 bytes.
-2. The encoder renders it as pulses with a 15 ms preamble; ffmpeg streams it
+2. The encoder renders it as pulses with a 48-pulse preamble; ffmpeg streams it
    to the `ZX Link` Loopback device; ZEsarUX feeds it to EAR.
-3. The slave's idle loop, alternating between watching EAR and scanning the
-   keyboard, sees the preamble and decodes the frame.
+3. The slave's idle loop -- which only watches EAR, since the IM2 handler
+   scans the keyboard at 50 Hz by itself -- sees the preamble, disables
+   interrupts and decodes the frame.
 4. The slave validates the frame, delivers the payload to `vtparse`, renders
    it, then builds its response carrying any queued keystrokes.
-5. The MIC send loop emits the response with a 15 ms preamble and a 32-byte
-   zero leadout. ZEsarUX writes every sample to `--aofile`.
+5. The MIC send loop emits the response with a 48-pulse preamble, a 32-byte
+   zero leadout and a closing edge. ZEsarUX writes every sample to `--aofile`.
 6. The decoder follows that file, recovers the frame, and the master delivers
    the keystrokes to the pty.
 

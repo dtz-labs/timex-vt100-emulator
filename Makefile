@@ -90,7 +90,7 @@ Z88DK_DEFS ?=
 # two names would let a copy-pasted recipe use the wrong one and no test
 # would catch it, since neither TAP is host-testable. The global default
 # below is the Timex value; the ZX targets override it with a target-specific
-# variable value (see "$(ZX_TAP) $(ZX_IF1_TAP): TARGET_DEFS := -DTERM_ZX"
+# variable value (see "$(ZX_TAP) $(ZX_IF1_TAP) $(ZX_AUDIO_TAP): TARGET_DEFS := -DTERM_ZX"
 # below) -- a plain Make feature that only takes effect while building that
 # target's recipe, not a new mechanism. This keeps the exact same
 # non-displaceable property: `make tap-zx Z88DK_DEFS=-DDEBUG` still gets
@@ -157,11 +157,10 @@ ZX_IF1_APP := $(BUILD_DIR)/$(ZX_IF1_TARGET)
 ZX_IF1_TAP := $(ZX_IF1_APP).tap
 ZX_IF1_MAP := $(ZX_IF1_APP).map
 
-# The ZX targets are the same variable, TARGET_DEFS, with a different fixed
-# value that applies only while building these two targets' recipes -- see
-# the comment on the Timex default above. Also deliberately `:=`, for the
-# same reason.
-$(ZX_TAP) $(ZX_IF1_TAP): TARGET_DEFS := -DTERM_ZX
+# The ZX targets' TARGET_DEFS override lives further down, immediately after
+# ZX_AUDIO_TAP is defined -- see "ZX target-specific TARGET_DEFS" below. It
+# CANNOT live here: Make expands a target-specific variable line's target list
+# when it reads the line, and ZX_AUDIO_TAP is still empty at this point.
 
 # IM2 vector table placement. main.c writes these addresses absolutely, so the
 # linker cannot know about them -- check_image_limit.py is what enforces them.
@@ -179,6 +178,47 @@ CHECK_IMAGE_LIMIT = python3 tools/check_image_limit.py
 SKIP_IMAGE_LIMIT_CHECK ?= 0
 IF1_BAUD ?= RS_BAUD_9600
 IF1_DEFS ?= -DCONN_BACKEND_IF1 -DCONN_IF1_BAUD=$(IF1_BAUD)
+
+# Audio backend. src/alink_phy.c is target-only (absolute ports, cycle-counted
+# loops) and must never reach a host test link line, exactly like blit_*.c.
+AUDIO_TARGET ?= term-audio
+ZX_AUDIO_TARGET ?= term-zx-audio
+AUDIO_DEFS ?= -DCONN_BACKEND_AUDIO
+AUDIO_SOURCES := src/alink_frame.c src/alink_slave.c src/alink_phy.c
+# The upstream probe: alink_phy_send() and nothing else, so `smoke-audio` can
+# capture MIC output with no tape inserted. It cannot share a run with the
+# terminal -- see test/alink_zesarux.py for why the two directions need two
+# runs. No screen, so no TARGET_DEFS and no image-limit gate: this TAP is a
+# test fixture, not a shipped image.
+TXPROBE_TARGET ?= alink-txprobe
+TXPROBE_SOURCES := test/alink_txprobe.c src/alink_frame.c src/alink_phy.c
+TXPROBE_APP := $(BUILD_DIR)/$(TXPROBE_TARGET)
+TXPROBE_TAP := $(TXPROBE_APP).tap
+
+AUDIO_APP := $(BUILD_DIR)/$(AUDIO_TARGET)
+AUDIO_TAP := $(AUDIO_APP).tap
+AUDIO_MAP := $(AUDIO_APP).map
+ZX_AUDIO_APP := $(BUILD_DIR)/$(ZX_AUDIO_TARGET)
+ZX_AUDIO_TAP := $(ZX_AUDIO_APP).tap
+ZX_AUDIO_MAP := $(ZX_AUDIO_APP).map
+
+# ZX target-specific TARGET_DEFS. The three ZX targets are the same variable,
+# TARGET_DEFS, with a different fixed value that applies only while building
+# their recipes -- see the comment on the Timex default near the top. Also
+# deliberately `:=`, for the same reason.
+#
+# It must appear AFTER ZX_AUDIO_TAP is defined, and that is not a style point.
+# Make expands the target list of a target-specific variable line when it READS
+# the line, not when it builds. This line used to sit next to ZX_IF1_MAP, above
+# the audio block, where `$(ZX_AUDIO_TAP)` expanded to nothing -- so the ZX
+# audio TAP was built with the global TARGET_DEFS, i.e. -DTERM_TIMEX. It
+# compiled, linked and passed the image-limit gate as an 80-column hi-res Timex
+# image called `term-zx-audio.tap`, and the only symptom was that running it on
+# a 48K stopped at "THIS BUILD NEEDS A TIMEX (SCLD)". test/alink_zesarux.py
+# found it on its first run against that TAP; nothing else could have.
+#
+# Anything added here later belongs below every *_TAP definition it names.
+$(ZX_TAP) $(ZX_IF1_TAP) $(ZX_AUDIO_TAP): TARGET_DEFS := -DTERM_ZX
 SERIAL ?=
 SERIAL_BAUD ?= 9600
 SERIAL_TERM ?= vt100
@@ -193,7 +233,7 @@ ZRCP_CMD ?=
 
 .DELETE_ON_ERROR:
 
-.PHONY: all tap if1 tap-zx if1-zx release-build test host-test ci python-check terminfo-check smoke smoke-zx bench install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
+.PHONY: all tap if1 tap-zx if1-zx audio audio-zx txprobe release-build test host-test ci python-check terminfo-check smoke smoke-zx smoke-audio bench install-terminfo terminfo run run-zrcp run-if1 run-audio bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
 	run-tc2048 run-tc2068 run-ts2068 clean \
 	check-z88dk check-zesarux check-timex-machine check-image-limit print-vars FORCE
 
@@ -202,6 +242,12 @@ all: tap
 tap: $(TAP)
 
 if1: $(IF1_TAP)
+
+audio: $(AUDIO_TAP)
+
+audio-zx: $(ZX_AUDIO_TAP)
+
+txprobe: $(TXPROBE_TAP)
 
 tap-zx: $(ZX_TAP)
 
@@ -227,6 +273,8 @@ host-test:
 	python3 test/test_alink_frame_py.py
 	python3 test/test_alink_master.py
 	python3 test/test_alink_xcheck.py
+	python3 test/test_alink_phy_py.py
+	python3 test/test_alink_runner.py
 
 ci: host-test python-check terminfo-check
 
@@ -241,7 +289,7 @@ bench:
 	sh tools/bench.sh
 
 python-check:
-	python3 -m py_compile tools/*.py test/zesarux_smoke.py test/test_check_image_limit.py
+	python3 -m py_compile tools/*.py test/zesarux_smoke.py test/alink_zesarux.py test/test_check_image_limit.py
 
 terminfo-check: $(TERMINFO_SRCS)
 	@for f in $(TERMINFO_SRCS); do tic -c -x "$$f" || exit 1; done
@@ -273,11 +321,33 @@ smoke-zx: $(ZX_TAP) check-zesarux
 	@echo "=== smoke-zx: term-zx.tap real-scroll content check on 48k ==="
 	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine 48k --geom ula --scenario scroll
 
+# The audio link on target, in both directions. `smoke`/`smoke-zx` above cover
+# the ZRCP builds; this covers the two audio builds plus the MIC send loop.
+#
+# Three runs, not two, because ZEsarUX cannot capture MIC output while a tape
+# is inserted: --aofile records the audio OUTPUT, and the MIC bit only reaches
+# it through the ULA's EAR feedback, which a --realtape displaces. So the
+# downstream direction is checked against each terminal image with a tape, and
+# the upstream direction against a probe with no tape at all. The full
+# reasoning, and the measurement behind it, are in test/alink_zesarux.py.
+smoke-audio: $(AUDIO_TAP) $(ZX_AUDIO_TAP) $(TXPROBE_TAP) check-zesarux
+	@echo "=== smoke-audio: term-audio.tap on $(TIMEX_MACHINE) (downstream) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/alink_zesarux.py --scenario link \
+		--tap "$(AUDIO_TAP)" --machine $(TIMEX_MACHINE) --geom hires
+	@echo "=== smoke-audio: term-zx-audio.tap on 48k (downstream) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/alink_zesarux.py --scenario link \
+		--tap "$(ZX_AUDIO_TAP)" --machine 48k --geom ula
+	@echo "=== smoke-audio: alink-txprobe.tap on $(TIMEX_MACHINE) (upstream) ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/alink_zesarux.py --scenario tx \
+		--tap "$(TXPROBE_TAP)" --machine $(TIMEX_MACHINE)
+
 # Runs the IM2 image-limit gate standalone against already-built .map files.
 # Used by CI as its own step outside the z88dk container (see
 # SKIP_IMAGE_LIMIT_CHECK above), but works locally too: `make tap if1 tap-zx
-# if1-zx SKIP_IMAGE_LIMIT_CHECK=1 && make check-image-limit`. Covers all four
-# TAPs -- the ZX build gets the same gate as the Timex one.
+# if1-zx audio audio-zx SKIP_IMAGE_LIMIT_CHECK=1 && make check-image-limit`.
+# Covers all six TAPs -- every build gets the same gate, and each map must
+# already exist, so a target missing from the build line fails loudly here
+# rather than being silently skipped.
 check-image-limit:
 	@test -f "$(MAP)" || { echo "$(MAP) not found; build $(TAP) first"; exit 1; }
 	$(CHECK_IMAGE_LIMIT) "$(MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
@@ -287,6 +357,10 @@ check-image-limit:
 	$(CHECK_IMAGE_LIMIT) "$(ZX_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 	@test -f "$(ZX_IF1_MAP)" || { echo "$(ZX_IF1_MAP) not found; build $(ZX_IF1_TAP) first"; exit 1; }
 	$(CHECK_IMAGE_LIMIT) "$(ZX_IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
+	@test -f "$(AUDIO_MAP)" || { echo "$(AUDIO_MAP) not found; build $(AUDIO_TAP) first"; exit 1; }
+	$(CHECK_IMAGE_LIMIT) "$(AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
+	@test -f "$(ZX_AUDIO_MAP)" || { echo "$(ZX_AUDIO_MAP) not found; build $(ZX_AUDIO_TAP) first"; exit 1; }
+	$(CHECK_IMAGE_LIMIT) "$(ZX_AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL)
 
 install-terminfo: $(TERMINFO_SRCS)
 	@command -v tic >/dev/null 2>&1 || { echo "tic not found"; exit 127; }
@@ -303,6 +377,15 @@ run-zrcp: $(TAP) check-zesarux check-timex-machine
 
 run-if1: $(IF1_TAP) check-zesarux check-timex-machine
 	"$(ZX)" --noconfigfile --machine "$(TIMEX_MACHINE)" --tape "$(CURDIR)/$(IF1_TAP)" --fastautoload
+
+# One audio-link exchange against the Timex build, keeping the generated tape
+# and the audio capture behind for inspection -- `smoke-audio` runs the same
+# harness but deletes them. `audio` / `audio-zx` (above) only BUILD; an earlier
+# edit accidentally redefined them down here with a recipe that launched the
+# emulator on the IF1 tap, which is what this section used to contain.
+run-audio: $(AUDIO_TAP) check-zesarux check-timex-machine
+	python3 test/alink_zesarux.py --tap "$(CURDIR)/$(AUDIO_TAP)" \
+		--machine "$(TIMEX_MACHINE)" --geom hires --keep
 
 bridge-if1:
 	@test -n "$(SERIAL)" || { echo "Set SERIAL=/dev/cu.your-adapter"; exit 2; }
@@ -350,6 +433,29 @@ $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
 		$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
 	fi
+
+$(AUDIO_TAP): $(SOURCES) $(AUDIO_SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
+	@echo "ZCC $(AUDIO_TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
+		$(AUDIO_DEFS) $(SOURCES) $(AUDIO_SOURCES) -o "$(AUDIO_APP)" -create-app $(Z88DK_LDFLAGS)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
+
+$(ZX_AUDIO_TAP): $(ZX_SOURCES) $(AUDIO_SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
+	@echo "ZCC $(ZX_AUDIO_TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
+		$(AUDIO_DEFS) $(ZX_SOURCES) $(AUDIO_SOURCES) -o "$(ZX_AUDIO_APP)" -create-app $(Z88DK_LDFLAGS)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(ZX_AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
+
+$(TXPROBE_TAP): $(TXPROBE_SOURCES) $(HEADERS) | $(BUILD_DIR) check-z88dk
+	@echo "ZCC $(TXPROBE_TAP)"
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(Z88DK_DEFS) \
+		$(TXPROBE_SOURCES) -o "$(TXPROBE_APP)" -create-app $(Z88DK_LDFLAGS)
 
 # Mirrors $(TAP)/$(IF1_TAP) above, one-for-one, but with $(ZX_SOURCES) instead
 # of $(SOURCES) -- TARGET_DEFS is -DTERM_ZX for these two targets via the

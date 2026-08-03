@@ -93,6 +93,15 @@ static const u8 demo_stream[] =
     "Version v" APP_VERSION_STR "  " APP_GIT_COMMIT "\r\n"
     "Built " APP_BUILD_DATE "\r\n"
     "\r\n"
+#ifdef CONN_BACKEND_AUDIO
+    /* The bridge help describes the ZRCP workflow, which this build does not
+     * have -- and the Timex audio image has no room to carry text about a
+     * backend it was compiled without. */
+    "Audio link. Waiting for HELLO.\r\n"
+    "  ENTER sends CR. CAPS+0=Backspace.\r\n"
+    "\r\n"
+    "Ready.";
+#else
     "Bridge quick help:\r\n"
     "  host -> target: pipe text via bridge.\r\n"
     "  target -> host: typed keys to host.\r\n"
@@ -102,6 +111,7 @@ static const u8 demo_stream[] =
     "  SYMBOL+0=underscore, raw mode opt.\r\n"
     "\r\n"
     "Ready.";
+#endif
 
 static volatile u8 key_overrun;
 static volatile u8 keyboard_settle_frames;
