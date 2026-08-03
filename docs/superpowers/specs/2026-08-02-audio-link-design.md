@@ -39,18 +39,16 @@ re-litigation:
   must be `--aofile`, a raw dump written synchronously with emulation.
 - **The Mac→ZX direction works** through the PoC pipeline: encoder → ffmpeg →
   Loopback virtual device named `ZX Link` → ZEsarUX External Audio Source.
-- **Capture truncates the tail of a transmission** by 8–16 bytes. The ZX→Mac
-  PoC pads every transmission with `LEADOUT_SIZE = 32` zero bytes after its
-  checksum so that whatever gets cut is padding, never data
-  (`zx_audio_link_tx.py:30–33, 263–275`). Our upstream frames carry their CRC
-  at the end, so we adopt the same leadout by default — without it a truncated
-  CRC would turn every upstream frame into a retransmission.
+- **Capture truncates the tail of a transmission** by 8–16 bytes, so the ZX→Mac
+  PoC pads every transmission with `LEADOUT_SIZE = 32` zero bytes
+  (`zx_audio_link_tx.py:30–33, 263–275`).
 
-  This is the one PoC finding adopted **provisionally rather than settled**,
-  because it costs 0.125 s on every upstream frame (see D6). The PoC does not
-  say whether it observed the truncation on the `--aofile` path or on its
-  earlier Loopback attempts, and only the former is ours. PR B Task 2 measures
-  it against real `--aofile` captures rather than inheriting the assumption.
+  **Measured and not adopted.** This is the one PoC finding that did not
+  survive contact with our own capture: 98/98 frames decoded with a leadout
+  and 234/234 without it, from real `--aofile` dumps of the Z80 transmitter.
+  Nothing truncates on this path — the PoC's observation belongs to its
+  earlier Loopback attempts. Our frames also end by **length** rather than by
+  silence, so the frame is complete before a leadout would even begin. See D6.
 
 ## D1 (DECIDED): the downstream physical layer
 
