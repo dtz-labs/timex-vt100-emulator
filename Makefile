@@ -224,6 +224,7 @@ test: host-test
 host-test:
 	CC="$(CC)" sh test/run.sh
 	python3 test/test_check_image_limit.py
+	python3 test/test_alink_frame_py.py
 
 ci: host-test python-check terminfo-check
 
