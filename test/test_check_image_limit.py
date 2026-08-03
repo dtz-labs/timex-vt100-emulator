@@ -182,8 +182,18 @@ def test_shipped_im2_header_constants_pass_the_gate():
 
     base = int(base_text, 0)
     fill = int(fill_text, 0)
-    check(base == 0xEE00, "IM2_TABLE_BASE matches the header's declared constant")
-    check(fill == 0xEF, "IM2_TABLE_FILL matches the header's declared constant")
+    # Deliberately NOT asserting literal addresses. Repeating them here would
+    # make this file a second place to edit whenever the memory map moves, and
+    # a test that only says "the header still says what the header says"
+    # catches nothing. What matters is that the constants remain internally
+    # consistent -- the same invariants include/im2.h #errors on in C, checked
+    # here against the values the Makefile actually extracts.
+    check(base % 0x100 == 0, "IM2_TABLE_BASE is 256-aligned")
+    check(0x00 < fill <= 0xFF, "IM2_TABLE_FILL is a single byte")
+    check(fill * 0x0101 >= base + 0x101,
+          "the trampoline lies past the end of the 257-byte table")
+    check(fill * 0x0101 + 3 < 0x10000,
+          "the trampoline's three bytes fit below the top of memory")
 
     with tempfile.TemporaryDirectory() as d:
         rep = cil.analyse(write_map(d, "$DE62"), base, fill)
