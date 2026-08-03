@@ -245,6 +245,7 @@ host-test:
 	python3 test/test_alink_master.py
 	python3 test/test_alink_xcheck.py
 	python3 test/test_alink_phy_py.py
+	python3 test/test_alink_runner.py
 
 ci: host-test python-check terminfo-check
 
