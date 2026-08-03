@@ -366,6 +366,43 @@ Optional:
 make bridge-if1 SERIAL=/dev/cu.usbserial-0001 SERIAL_BAUD=9600 SERIAL_TERM=timex-vt102 SERIAL_CMD='ssh user@host'
 ```
 
+## Audio Link (Tape Ports)
+
+A third backend that talks to a PC over the tape ports — EAR in, MIC out — so
+a stock machine needs no Interface 1 and no serial adapter, only two audio
+cables. It speaks Half-Duplex Terminal Protocol v1 over its own EAR decoder
+and MIC send loop, at the ROM's bit timings, calling no ROM routine at all;
+that is what keeps it working on a TS2068 as well as a Sinclair machine.
+
+Build the audio TAPs:
+
+```sh
+make audio      # build/term-audio.tap     -- Timex, 80x24
+make audio-zx   # build/term-zx-audio.tap  -- ZX Spectrum, 40x24
+```
+
+Verify both directions under ZEsarUX, with no audio device, loopback cable or
+`sox` involved:
+
+```sh
+make smoke-audio
+```
+
+Run it against real hardware, with a shell on the other end:
+
+```sh
+python3 -m alink.main --aofile /path/to/capture.raw --device "ZX Link" \
+    --command /bin/zsh --cols 80
+```
+
+Full wiring, level-setting and troubleshooting notes are in
+[`docs/audio-link-setup.md`](docs/audio-link-setup.md) — including why the
+upstream direction cannot be captured under ZEsarUX while anything is attached
+to EAR, and what to do instead.
+
+Measured: 134 B/s, a 29.7 ms preamble, a 0.051 s empty poll, and the machine
+deaf about 10% of an idle second.
+
 ## Test
 
 Host tests:
@@ -388,6 +425,8 @@ ZRCP_PORT=10140 make smoke      # term.tap: startup screen, the SCLD guard firin
                                  # a real-scroll content check
 ZRCP_PORT=10140 make smoke-zx   # term-zx.tap: startup screen on its native 48k,
                                  # and on a TC2048 (the safe-default claim)
+ZRCP_PORT=10140 make smoke-audio # both audio TAPs receiving a generated tape,
+                                 # and the MIC send loop captured and decoded
 ```
 
 Use a fresh `ZRCP_PORT` if a previous ZEsarUX session may still be running.

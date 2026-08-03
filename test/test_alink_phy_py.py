@@ -87,6 +87,52 @@ def test_round_trip_unsigned8():
           "an unsigned-8 dump with a DC offset decodes")
 
 
+def as_mic_capture(pcm16, *, rest=64, swing=16, lead_s=0.5, tail_s=0.5):
+    """Render signed-16 PCM the way ZEsarUX's --aofile records MIC output.
+
+    Two properties matter, and both are measured off a real capture (see
+    test/alink_zesarux.py):
+
+    UNIPOLAR. The line RESTS at one level and pulses to another; it does not
+    swing symmetrically about a mid-point. The mean of an isolated burst is
+    therefore the resting level, not the middle of the signal.
+
+    ISOLATED. A real terminal sends one frame per transaction and then goes
+    quiet, so a burst begins from a long stretch of dead-constant samples with
+    no history to estimate anything from.
+
+    Together those two are what an exponential-mean DC tracker cannot handle:
+    when the preamble arrives its estimate is still parked at the resting
+    level, every sample lands on the same side of the threshold, and a capture
+    full of perfectly good frames decodes to nothing at all. That is not a
+    hypothetical -- it is what the first run of the ZEsarUX harness produced,
+    against a capture whose pulse widths were exactly right.
+    """
+    rate = phy.SAMPLE_RATE
+    out = bytearray([rest] * int(lead_s * rate))
+    for i in range(0, len(pcm16), 2):
+        sample = int.from_bytes(pcm16[i:i + 2], "little", signed=True)
+        out.append(rest + swing if sample > 0 else rest)
+    out.extend([rest] * int(tail_s * rate))
+    return bytes(out)
+
+
+def test_isolated_unipolar_burst_decodes():
+    """The shape of real MIC traffic: silence, one frame, silence."""
+    block = frame.encode(frame.LINK, 1, 0, b"TX PROBE")
+    dump = as_mic_capture(phy.pulses_to_pcm(phy.encode_block(block)))
+    check(phy.decode_raw(dump, unsigned8=True) == [block],
+          "an isolated unipolar burst decodes")
+
+    # And again with two bursts separated by silence, which is what a session
+    # actually looks like: the decoder must re-acquire, not just work once.
+    pcm = phy.pulses_to_pcm(phy.encode_block(block))
+    gap = bytes([64] * int(0.4 * phy.SAMPLE_RATE))
+    dump = as_mic_capture(pcm) + gap + as_mic_capture(pcm, lead_s=0.0)
+    check(phy.decode_raw(dump, unsigned8=True) == [block, block],
+          "a second burst after a gap decodes too")
+
+
 def test_truncated_tail_is_absorbed_by_leadout():
     """Capture cuts 8-16 bytes off the end of a transmission.
 
@@ -203,6 +249,7 @@ def main():
     test_leadout_is_appended()
     test_round_trip_every_frame_length()
     test_round_trip_unsigned8()
+    test_isolated_unipolar_burst_decodes()
     test_truncated_tail_is_absorbed_by_leadout()
     test_back_to_back_blocks()
     test_noise_alone_yields_nothing()

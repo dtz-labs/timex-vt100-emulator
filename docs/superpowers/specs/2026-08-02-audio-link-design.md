@@ -150,7 +150,7 @@ Turbo timings remain available later as a pure physical-layer change with no
 protocol impact.
 
 The recommendation is therefore: **own decoder, ROM bit rate.** ~300 bytes of
-Z80, 106 B/s, a responsive keyboard and no ROM dependence — against ~50 bytes,
+Z80, 134 B/s, a responsive keyboard and no ROM dependence — against ~50 bytes,
 51 B/s, a keyboard deaf most of the time, and a build pinned to one ROM.
 
 This reversed an earlier answer that had been given on false information, so

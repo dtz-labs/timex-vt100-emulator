@@ -188,21 +188,33 @@ class PulseDecoder:
     #: classify, whatever the sample rate nominally is.
     MIN_PILOT_WIDTH = 3.0
 
-    #: The DC estimate has to settle inside the preamble, and our preamble is
-    #: 29.7 ms rather than the ROM's 1.99 s. The proof of concept tracked DC
-    #: with a single 0.0005 coefficient -- a 2,000-sample (41 ms) time
-    #: constant, which had two seconds of pilot to converge in. At our
-    #: preamble length that estimate is still miles off when the data starts,
-    #: and on an 8-bit dump with a large DC offset both halves of the signal
-    #: then land on the same side of the threshold and no edge is ever seen.
-    #: So: converge fast for a warmup window, then switch to the slow
-    #: coefficient that rejects drift without chasing the signal.
-    DC_WARMUP_SAMPLES = 512
-    DC_ALPHA_WARMUP = 0.02
-    DC_ALPHA_TRACK = 0.0005
+    #: The mid-point between the two signal levels is tracked as the middle of
+    #: an envelope, not as a running mean, and this is load bearing.
+    #:
+    #: A mean only sits between the levels when the signal spends about half
+    #: its time at each. ZEsarUX's MIC output does not: it RESTS at one level
+    #: and pulses to the other, so between transmissions the mean is the
+    #: resting level itself. An earlier version of this decoder used a mean
+    #: with a 2,000-sample time constant, and it worked -- on a probe that
+    #: transmitted back to back forever, which gave the mean a continuous
+    #: 50%-duty signal to converge into. Against a real terminal, which sends
+    #: one ~70 ms frame per transaction and then goes quiet, the estimate is
+    #: still parked at the resting level when the preamble arrives: every
+    #: sample of that preamble lands on the same side of the threshold, no
+    #: edge is ever detected, and a capture full of perfectly good frames
+    #: decodes to nothing at all. That is exactly what test/alink_zesarux.py
+    #: found on its first run.
+    #:
+    #: The envelope has instant attack and slow release, so the mid-point is
+    #: correct from the FIRST edge of a burst -- there is nothing to converge.
+    #: The release constant only has to be slow enough to hold the envelope
+    #: open across one half-pulse (5-13 samples at these rates); it is far
+    #: slower than that, since the amplitude itself never changes.
+    ENVELOPE_RELEASE = 0.0002
 
     def __init__(self):
-        self.dc = 0.0
+        self.hi = 0.0
+        self.lo = 0.0
         self.peak = 0.0
         self.level = 0
         self.run = 0
@@ -222,17 +234,23 @@ class PulseDecoder:
     def feed(self, samples):
         """Consume samples, yielding each complete block as it finishes."""
         for value in samples:
-            # ZEsarUX emits the MIC bit as a small swing around a large
-            # constant level, so the DC offset is tracked and removed rather
-            # than assumed to be zero.
+            # ZEsarUX emits the MIC bit as a swing around a large constant
+            # level, so the offset is tracked and removed rather than assumed
+            # to be zero. Attack is instant, release slow: see
+            # ENVELOPE_RELEASE for why a mean will not do.
             if self.seen == 0:
-                self.dc = float(value)      # start inside the signal, not at 0
+                self.hi = self.lo = float(value)   # start inside the signal
             self.seen += 1
-            alpha = (self.DC_ALPHA_WARMUP if self.seen <= self.DC_WARMUP_SAMPLES
-                     else self.DC_ALPHA_TRACK)
-            self.dc += (value - self.dc) * alpha
-            ac = value - self.dc
-            self.peak = max(abs(ac), self.peak * 0.99995)
+            if value > self.hi:
+                self.hi = float(value)
+            else:
+                self.hi += (self.lo - self.hi) * self.ENVELOPE_RELEASE
+            if value < self.lo:
+                self.lo = float(value)
+            else:
+                self.lo += (self.hi - self.lo) * self.ENVELOPE_RELEASE
+            ac = value - (self.hi + self.lo) / 2.0
+            self.peak = max((self.hi - self.lo) / 2.0, self.peak * 0.99995)
             threshold = max(1.0, self.peak * 0.25)
             if ac > threshold:
                 new_level = 1
