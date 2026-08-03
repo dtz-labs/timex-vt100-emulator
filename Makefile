@@ -90,7 +90,7 @@ Z88DK_DEFS ?=
 # two names would let a copy-pasted recipe use the wrong one and no test
 # would catch it, since neither TAP is host-testable. The global default
 # below is the Timex value; the ZX targets override it with a target-specific
-# variable value (see "$(ZX_TAP) $(ZX_IF1_TAP): TARGET_DEFS := -DTERM_ZX"
+# variable value (see "$(ZX_TAP) $(ZX_IF1_TAP) $(ZX_AUDIO_TAP): TARGET_DEFS := -DTERM_ZX"
 # below) -- a plain Make feature that only takes effect while building that
 # target's recipe, not a new mechanism. This keeps the exact same
 # non-displaceable property: `make tap-zx Z88DK_DEFS=-DDEBUG` still gets
@@ -161,7 +161,7 @@ ZX_IF1_MAP := $(ZX_IF1_APP).map
 # value that applies only while building these two targets' recipes -- see
 # the comment on the Timex default above. Also deliberately `:=`, for the
 # same reason.
-$(ZX_TAP) $(ZX_IF1_TAP): TARGET_DEFS := -DTERM_ZX
+$(ZX_TAP) $(ZX_IF1_TAP) $(ZX_AUDIO_TAP): TARGET_DEFS := -DTERM_ZX
 
 # IM2 vector table placement. main.c writes these addresses absolutely, so the
 # linker cannot know about them -- check_image_limit.py is what enforces them.
@@ -179,6 +179,19 @@ CHECK_IMAGE_LIMIT = python3 tools/check_image_limit.py
 SKIP_IMAGE_LIMIT_CHECK ?= 0
 IF1_BAUD ?= RS_BAUD_9600
 IF1_DEFS ?= -DCONN_BACKEND_IF1 -DCONN_IF1_BAUD=$(IF1_BAUD)
+
+# Audio backend. src/alink_phy.c is target-only (absolute ports, cycle-counted
+# loops) and must never reach a host test link line, exactly like blit_*.c.
+AUDIO_TARGET ?= term-audio
+ZX_AUDIO_TARGET ?= term-zx-audio
+AUDIO_DEFS ?= -DCONN_BACKEND_AUDIO
+AUDIO_SOURCES := src/alink_frame.c src/alink_slave.c src/alink_phy.c
+AUDIO_APP := $(BUILD_DIR)/$(AUDIO_TARGET)
+AUDIO_TAP := $(AUDIO_APP).tap
+AUDIO_MAP := $(AUDIO_APP).map
+ZX_AUDIO_APP := $(BUILD_DIR)/$(ZX_AUDIO_TARGET)
+ZX_AUDIO_TAP := $(ZX_AUDIO_APP).tap
+ZX_AUDIO_MAP := $(ZX_AUDIO_APP).map
 SERIAL ?=
 SERIAL_BAUD ?= 9600
 SERIAL_TERM ?= vt100
@@ -193,7 +206,7 @@ ZRCP_CMD ?=
 
 .DELETE_ON_ERROR:
 
-.PHONY: all tap if1 tap-zx if1-zx release-build test host-test ci python-check terminfo-check smoke smoke-zx bench install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
+.PHONY: all tap if1 tap-zx if1-zx audio audio-zx release-build test host-test ci python-check terminfo-check smoke smoke-zx bench install-terminfo terminfo run run-zrcp run-if1 bridge-if1 inject-zrcp bridge-zrcp shell-zrcp \
 	run-tc2048 run-tc2068 run-ts2068 clean \
 	check-z88dk check-zesarux check-timex-machine check-image-limit print-vars FORCE
 
@@ -202,6 +215,10 @@ all: tap
 tap: $(TAP)
 
 if1: $(IF1_TAP)
+
+audio: $(AUDIO_TAP)
+
+audio-zx: $(ZX_AUDIO_TAP)
 
 tap-zx: $(ZX_TAP)
 
@@ -302,7 +319,11 @@ run-zrcp: $(TAP) check-zesarux check-timex-machine
 	"$(ZX)" --noconfigfile --machine "$(TIMEX_MACHINE)" --tape "$(CURDIR)/$(TAP)" --fastautoload \
 		--enable-remoteprotocol --remoteprotocol-port "$(ZRCP_PORT)"
 
-run-if1: $(IF1_TAP) check-zesarux check-timex-machine
+run-if1: $(IF1_TAP)
+
+audio: $(AUDIO_TAP)
+
+audio-zx: $(ZX_AUDIO_TAP) check-zesarux check-timex-machine
 	"$(ZX)" --noconfigfile --machine "$(TIMEX_MACHINE)" --tape "$(CURDIR)/$(IF1_TAP)" --fastautoload
 
 bridge-if1:
@@ -350,6 +371,24 @@ $(IF1_TAP): $(SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
 		$(IF1_DEFS) $(SOURCES) -o "$(IF1_APP)" -create-app $(Z88DK_LDFLAGS)
 	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
 		$(CHECK_IMAGE_LIMIT) "$(IF1_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
+
+$(AUDIO_TAP): $(SOURCES) $(AUDIO_SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
+	@echo "ZCC $(AUDIO_TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
+		$(AUDIO_DEFS) $(SOURCES) $(AUDIO_SOURCES) -o "$(AUDIO_APP)" -create-app $(Z88DK_LDFLAGS)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
+	fi
+
+$(ZX_AUDIO_TAP): $(ZX_SOURCES) $(AUDIO_SOURCES) $(HEADERS) $(BUILD_META) | $(BUILD_DIR) check-z88dk
+	@echo "ZCC $(ZX_AUDIO_TAP)"
+	@printf '#define APP_BUILD_DATE "%s"\n' "$(BUILD_DATE)" > "$(BUILD_DATE_H)"
+	@$(Z88DK_ENV) "$(ZCC)" $(Z88DK_TARGET) $(Z88DK_CFLAGS) $(TARGET_DEFS) $(Z88DK_DEFS) \
+		$(AUDIO_DEFS) $(ZX_SOURCES) $(AUDIO_SOURCES) -o "$(ZX_AUDIO_APP)" -create-app $(Z88DK_LDFLAGS)
+	@if [ "$(SKIP_IMAGE_LIMIT_CHECK)" != "1" ]; then \
+		$(CHECK_IMAGE_LIMIT) "$(ZX_AUDIO_MAP)" --im2-base $(IM2_TABLE_BASE) --im2-fill $(IM2_TABLE_FILL); \
 	fi
 
 # Mirrors $(TAP)/$(IF1_TAP) above, one-for-one, but with $(ZX_SOURCES) instead
