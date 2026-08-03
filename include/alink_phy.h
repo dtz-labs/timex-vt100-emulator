@@ -51,4 +51,15 @@ void alink_phy_init(void);
  * `n` must be at most ALINK_FRAME_MAX. */
 void alink_phy_send(const u8 *block, u8 n);
 
+/* 1 if EAR is showing edges right now. Cheap (~5,800 T) and safe to call with
+ * interrupts enabled, which is how the main loop watches the line while the
+ * IM2 handler keeps scanning the keyboard. */
+u8 alink_phy_carrier(void);
+
+/* Receive one frame: lock the preamble, read the sync pair, then CTRL, LEN
+ * and LEN+2 more bytes. Returns the byte count, or 0 on any timing failure.
+ * `max` must be at least ALINK_FRAME_MAX. Disables interrupts for its
+ * duration and re-enables them on every exit path. */
+u8 alink_phy_receive(u8 *block, u8 max);
+
 #endif /* ALINK_PHY_H */

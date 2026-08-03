@@ -248,3 +248,217 @@ void alink_phy_send(const u8 *block, u8 n)
     phy_count = n;
     phy_send_asm();
 }
+
+/*
+ * ---- receiver ----
+ *
+ * alink_edge measures one half-pulse by polling EAR (bit 6 of port 0xFE) in a
+ * 45 T loop and counting iterations until the level changes. At that
+ * resolution a pilot pulse is 48 iterations, a one half-pulse 38, a zero half
+ * 19 -- so a bit's PAIR SUM is 38 for a zero and 76 for a one, either side of
+ * a threshold at pilot + pilot/4 = 60. Classifying on the pair rather than on
+ * one half doubles the resolution for free, which is what makes a 45 T loop
+ * enough and a cycle-counted turbo decoder unnecessary.
+ *
+ * Every width is bounded: the counter is 8-bit, so a stalled signal aborts
+ * after 255 iterations (11,475 T, about 5 pilot pulses) instead of hanging.
+ *
+ * EVERY EXIT PATH RE-ENABLES INTERRUPTS. A path that returned with them off
+ * would stop the IM2 keyboard scanner permanently, which does not look like a
+ * bug -- it looks like the machine hung.
+ */
+
+static u8 alink_pilot;
+static u8 alink_thresh;
+static u8 alink_syncmax;
+static u8 alink_got;
+static u8 alink_want;
+static u8 *alink_dst;
+static u8 alink_edges;
+
+static void phy_carrier_asm(void) __naked
+{
+    __asm
+        in      a,(#0xfe)
+        and     #0x40
+        ld      c,a
+        ld      d,#0
+        ld      b,#128
+alink_carr:
+        in      a,(#0xfe)
+        and     #0x40
+        cp      c
+        jr      z,alink_carr_n
+        ld      c,a
+        inc     d
+alink_carr_n:
+        djnz    alink_carr
+        ld      a,d
+        ld      (_alink_edges),a
+        ret
+    __endasm;
+}
+
+static void phy_recv_asm(void) __naked
+{
+    __asm
+        di
+        xor     a
+        ld      (_alink_got),a
+
+        in      a,(#0xfe)
+        and     #0x40
+        ld      c,a
+
+        ld      l,#0
+        ld      h,#0
+        ld      d,#200
+alink_lock:
+        dec     d
+        jp      z,alink_fail
+        call    alink_edge
+        jp      c,alink_fail
+        ld      a,l
+        or      a
+        jr      z,alink_lock_new
+        ld      a,b
+        sub     l
+        jr      nc,alink_lock_pos
+        neg
+alink_lock_pos:
+        ld      e,a
+        ld      a,l
+        srl     a
+        srl     a
+        cp      e
+        jr      c,alink_lock_new
+        inc     h
+        ld      a,h
+        cp      #16
+        jr      c,alink_lock
+        jr      alink_locked
+alink_lock_new:
+        ld      l,b
+        ld      h,#1
+        jr      alink_lock
+
+alink_locked:
+        ld      a,l
+        ld      (_alink_pilot),a
+        srl     a
+        srl     a
+        ld      e,a
+        ld      a,l
+        sub     e
+        ld      (_alink_syncmax),a
+        ld      a,l
+        srl     a
+        srl     a
+        add     a,l
+        ld      (_alink_thresh),a
+
+        ld      d,#200
+alink_sync:
+        dec     d
+        jp      z,alink_fail
+        call    alink_edge
+        jp      c,alink_fail
+        ld      e,b
+        ld      a,(_alink_syncmax)
+        cp      e
+        jr      c,alink_sync
+        call    alink_edge
+        jp      c,alink_fail
+
+        ld      hl,(_alink_dst)
+        ld      a,#255
+        ld      (_alink_want),a
+
+alink_byte_in:
+        ld      d,#0
+        ld      a,#8
+        ld      (_alink_bits),a
+alink_bit_in:
+        call    alink_edge
+        jp      c,alink_fail
+        ld      e,b
+        call    alink_edge
+        jp      c,alink_fail
+        ld      a,e
+        add     a,b
+        ld      e,a
+        ld      a,(_alink_thresh)
+        cp      e
+        rl      d
+        ld      a,(_alink_bits)
+        dec     a
+        ld      (_alink_bits),a
+        jp      nz,alink_bit_in
+
+        ld      (hl),d
+        inc     hl
+        ld      a,(_alink_got)
+        inc     a
+        ld      (_alink_got),a
+        cp      #2
+        jr      nz,alink_chk
+        push    hl
+        ld      hl,(_alink_dst)
+        inc     hl
+        ld      a,(hl)
+        pop     hl
+        cp      #65
+        jp      nc,alink_fail
+        add     a,#4
+        ld      (_alink_want),a
+alink_chk:
+        ld      a,(_alink_got)
+        ld      e,a
+        ld      a,(_alink_want)
+        cp      e
+        jp      nz,alink_byte_in
+        ei
+        ret
+
+alink_fail:
+        xor     a
+        ld      (_alink_got),a
+        ei
+        ret
+
+alink_edge:
+        ld      b,#0
+alink_edge_l:
+        inc     b
+        jr      z,alink_edge_to
+        in      a,(#0xfe)
+        and     #0x40
+        cp      c
+        jr      z,alink_edge_l
+        ld      c,a
+        or      a
+        ret
+alink_edge_to:
+        scf
+        ret
+
+_alink_bits:
+        .db     0
+    __endasm;
+}
+
+u8 alink_phy_carrier(void)
+{
+    phy_carrier_asm();
+    return (u8)((alink_edges >= 2u) ? 1u : 0u);
+}
+
+u8 alink_phy_receive(u8 *block, u8 max)
+{
+    if (max < ALINK_FRAME_MAX) {
+        return 0;
+    }
+    alink_dst = block;
+    phy_recv_asm();
+    return alink_got;
+}

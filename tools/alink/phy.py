@@ -110,6 +110,43 @@ def pulses_to_pcm(pulses, sample_rate=SAMPLE_RATE, amplitude=AMPLITUDE):
     return bytes(out)
 
 
+#: ZEsarUX's --realtape reads a bare .raw file at exactly this rate, mono and
+#: 8-bit unsigned, with no external tooling. Any other format (including WAV)
+#: goes through the sox utility, which is a dependency worth not having: the
+#: emulator prints "Unable to find sox program" and silently plays nothing.
+REALTAPE_RATE = 44_100
+
+
+def pulses_to_raw_u8(pulses, sample_rate=REALTAPE_RATE):
+    """Render pulse widths to unsigned 8-bit mono, the --realtape raw format."""
+    out = bytearray()
+    high = True
+    position = 0.0
+    for width in pulses:
+        end = position + width * sample_rate / ZX_CLOCK_HZ
+        count = max(1, round(end) - round(position))
+        out.extend(b"\xd0" if high else b"\x30")
+        out.extend((b"\xd0" if high else b"\x30") * (count - 1))
+        position = end
+        high = not high
+    return bytes(out)
+
+
+def write_realtape(path, blocks, *, leadout=0, gap_pulses=8):
+    """Write one or more blocks as a --realtape raw file.
+
+    `gap_pulses` inserts a long idle stretch between blocks so a receiver that
+    joins mid-stream has a clean preamble to lock onto rather than landing in
+    the middle of one.
+    """
+    pulses = []
+    for block in blocks:
+        pulses.extend(encode_block(block, leadout=leadout))
+        pulses.append(PILOT_T * gap_pulses)
+    with open(path, "wb") as f:
+        f.write(pulses_to_raw_u8(pulses))
+
+
 def write_wav(path, block, *, leadout=0, sample_rate=SAMPLE_RATE):
     """Write one block as a mono 16-bit WAV.
 

@@ -145,6 +145,30 @@ def test_impossible_length_is_rejected():
           "LEN=200 is abandoned, not accumulated")
 
 
+def test_realtape_raw_round_trip():
+    """The --realtape raw format: 44,100 Hz mono 8-bit unsigned.
+
+    This is the one input format ZEsarUX reads with no external tooling. A WAV
+    goes through the sox utility, and when sox is absent the emulator prints
+    "Unable to find sox program" and then silently plays nothing -- a failure
+    that looks exactly like a broken decoder. The extension matters too:
+    ZEsarUX identifies the format by name and rejects ".raw" with "Unknown
+    input tape type". It must be ".rwa".
+    """
+    path = "/tmp/alink_realtape_test.rwa"
+    a = frame.encode(frame.LINK, 0, 1, b"one")
+    b = frame.encode(frame.LINK, 1, 1, b"two")
+    phy.write_realtape(path, [a, b])
+    with open(path, "rb") as f:
+        data = f.read()
+    check(len(data) > 1000, "the file has real content")
+    check(all(v in (0x30, 0xD0) for v in data[:200]),
+          "samples are two unsigned 8-bit levels")
+    check(phy.decode_raw(data, unsigned8=True) == [a, b],
+          "both blocks decode back out of the raw file")
+    os.unlink(path)
+
+
 def test_wav_round_trip():
     path = "/tmp/alink_phy_test.wav"
     block = frame.encode(frame.HELLO, 0, 0,
@@ -183,6 +207,7 @@ def main():
     test_back_to_back_blocks()
     test_noise_alone_yields_nothing()
     test_impossible_length_is_rejected()
+    test_realtape_raw_round_trip()
     test_wav_round_trip()
     test_air_time_matches_the_design()
     print(f"alink_phy_py: {checks} checks passed")
