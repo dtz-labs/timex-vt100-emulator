@@ -10,7 +10,7 @@ There is no host behind it, so the terminal runs in
 loopback: type and the bytes come back through the VT parser onto the screen.
 Attaching it to a real shell is [issue #1](https://github.com/dtz-labs/zx-vt102-terminal/issues/1).
 
-VT102-style terminal built from one source tree, with two TAPs for two
+VT102-style terminal built from one source tree, with a TAP for each of two
 different machines:
 
 | `make` target | file | machine | geometry | video |
@@ -18,8 +18,10 @@ different machines:
 | `make tap` | `build/term.tap` | Timex TC2048/TC2068/TS2068 | 80x24 | SCLD hi-res (512x192, two display files) |
 | `make tap-zx` | `build/term-zx.tap` | ZX Spectrum 48K/128K (and Timex) | 40x24 | ULA (256x192, one display file) |
 
-Both add an `-if1` variant (`make if1` / `make if1-zx`) that swaps the
-loopback demo for a real Interface 1 RS-232 backend.
+Each has two more variants that swap the loopback demo for a real transport:
+an `-if1` one (`make if1` / `make if1-zx`) driving an Interface 1 RS-232, and
+an `-audio` one (`make audio` / `make audio-zx`) driving the tape ports — see
+[Audio Link](#audio-link-tape-ports). Six images, one source tree.
 
 **The two builds are not symmetric.** The Timex build depends on the SCLD
 hi-res video hardware; it probes for one at startup and refuses to run rather
