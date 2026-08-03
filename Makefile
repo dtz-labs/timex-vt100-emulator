@@ -267,6 +267,8 @@ smoke-zx: $(ZX_TAP) check-zesarux
 	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine 48k --geom ula --scenario normal
 	@echo "=== smoke-zx: term-zx.tap on $(TIMEX_MACHINE) (the safe-default claim) ==="
 	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine $(TIMEX_MACHINE) --geom ula --scenario normal
+	@echo "=== smoke-zx: term-zx.tap real-scroll content check on 48k ==="
+	ZRCP_PORT="$(ZRCP_PORT)" python3 test/zesarux_smoke.py --tap "$(ZX_TAP)" --machine 48k --geom ula --scenario scroll
 
 # Runs the IM2 image-limit gate standalone against already-built .map files.
 # Used by CI as its own step outside the z88dk container (see

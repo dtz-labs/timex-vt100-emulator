@@ -574,3 +574,79 @@ number is bit-for-bit identical -- code generation for this source is
 stable across these two builds, which is a useful (if incidental) data
 point for how much CI's use of `z88dk/z88dk:latest` can be expected to move
 these numbers between runs.
+
+## Scroll run coalescing (2026-08-02)
+
+Perf-review recommendation 5 ("hoist video text-row addressing, handle both
+files together") -- the one recommendation from
+`docs/superpowers/reviews/2026-07-26-perf-review.md` never implemented. The
+I5 fix wave above brought `scroll_vram` down by collapsing the "thirds"
+formula into a macro, but left the loop shape untouched: one `memcpy(32)` per
+(text row, scanline) pair, 192 per display file for a 24-row region.
+
+`HIRES_THIRDS_OFFSET()`/`ULA_THIRDS_OFFSET()` decompose a pixel row as
+
+    offset = third * 2048 + scanline * 256 + row_in_third * 32
+
+so at a fixed third and scanline the eight text rows form one contiguous
+256-byte block. `scroll_file_up_one()`/`scroll_file_down_one()`
+(`src/blit_hires.c`) and `scroll_up_one()`/`scroll_down_one()`
+(`src/blit_ula.c`) now walk scanline-major and coalesce each maximal run of
+rows sharing a third into a single overlapping `memmove()`, falling back to a
+one-row `memcpy()` only where a run would cross a third boundary.
+
+The saving is call and address-computation overhead, not copy speed: LDIR is
+LDIR either way. A 24-row region drops from 192 `memcpy(32)` calls per
+display file to ~24 `memmove()` calls plus boundary copies.
+
+**Compiler:** `zcc +zx -SO3 -clib=sdcc_iy`, `v23854-4d530b6eb7-20251002`.
+
+| Path | Timex before | Timex after | Change | ZX before | ZX after | Change |
+|---|---:|---:|---|---:|---:|---|
+| **scroll_vram** | **565,037** | **354,903** | **-210,134 (-37.2%)** | **265,581** | **174,893** | **-90,688 (-34.1%)** |
+| row_normal | 268,717 | 268,717 | unchanged | 129,732 | 129,750 | +18 (noise) |
+| row_attrs | 550,543 | 550,543 | unchanged | 273,694 | 273,694 | unchanged |
+| row_blank | 40,198 | 40,198 | unchanged | 27,111 | 27,111 | unchanged |
+| scroll_model | 101,533 | 101,508 | -25 (noise) | 53,808 | 53,808 | unchanged |
+
+That is **1.59x** on the Timex and **1.52x** on the ZX, landing 2.7% above the
+perf review's diagnostic target of 345,464 T for the hi-res path -- the first
+time that target has been approached by shipped code rather than a prototype.
+
+A full scrolled row (model + VRAM) now costs 456,411 T (0.130 s) on the Timex
+and 228,701 T (0.065 s) on the ZX, down from 666,570 T (0.190 s) and
+319,389 T (0.091 s).
+
+### Cost in bytes
+
+| Build | Image end before | after | Cost |
+|---|---|---|---:|
+| `term.tap` | 0xE681 (margin 1,919) | 0xE71F (margin 1,761) | +158 B |
+| `term-zx.tap` | 0xDBD4 (margin 4,652) | 0xDD62 (margin 4,254) | +398 B |
+
+The ZX build pays more for the same source change because `blit_ula.c`
+addresses `ULA_FILE` as a compile-time constant inside both scroll routines,
+while `blit_hires.c` takes `base` as a parameter and calls one routine twice;
+SDCC generates the constant-folded form separately at each site.
+
+### Correctness
+
+`blit_*.c` write to absolute video RAM and cannot be linked into a host test,
+so equivalence was established two ways:
+
+1. **Exhaustive off-target proof** (`tools/scroll_equiv.c`). Both algorithms
+   (the previous per-row form and the coalesced form) were re-hosted verbatim
+   against a simulated 6,144-byte display file and compared byte-for-byte
+   over all 276 `(top, bot)` regions in both directions -- 552 combinations,
+   all identical. The harness was mutation-checked: shortening the run
+   computation by one row is caught immediately, and removing the
+   third-boundary case hangs the loop. It is frozen, not wired into
+   `test/run.sh`: it carries its own copy of code that no longer exists, so
+   it can only prove what it proved on the day it was written.
+2. **On-target.** `make smoke` scenario `scroll` on TC2048 (47/47) and the
+   same scenario on the ULA build (47/47), both verifying glyph content of
+   every row after a real scroll in the running program, not just that a
+   scroll happened.
+
+`smoke-zx` previously had no `scroll` scenario, so the ULA scroll path had no
+on-target coverage at all; the Makefile target now runs it.
