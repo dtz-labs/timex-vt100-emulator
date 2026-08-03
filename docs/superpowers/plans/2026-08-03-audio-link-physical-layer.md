@@ -295,7 +295,22 @@ Run: `make bench`
 
 Compute the per-pulse cost from the total and compare against the targets. Adjust the delay constants until every pulse width is within 2% of 2,168 / 667 / 735 / 855 / 1,710 T. Record the measured values in `docs/perf/benchmarks.md` under a new "Audio link PHY timings" section, with the same discipline as the other entries there: state the compiler build and show the arithmetic.
 
-- [ ] **Step 5: Verify on target with `--aofile`**
+- [ ] **Step 5: Measure whether the leadout is needed**
+
+The 32-byte leadout costs 0.125 s on every upstream frame -- 21% of a typical
+transaction, and the single largest avoidable cost in the link. The proof of
+concept added it after observing capture truncate a transmission's tail by
+8-16 bytes, but does not say whether that was on the `--aofile` path or its
+earlier Loopback attempts, and only the former is ours.
+
+Capture 20 consecutive transmissions sent WITHOUT a leadout and count how many
+decode. If all 20 do, drop the leadout: throughput goes from 106 to 134 B/s
+and idle deafness from 23% to 10%. If any are truncated, keep it and record
+the observed truncation length. Either way, record the measurement in
+`docs/perf/benchmarks.md` and update the design spec's D6 note, which
+currently states this as an open question.
+
+- [ ] **Step 6: Verify on target with `--aofile`**
 
 Build a throwaway TAP that calls `alink_phy_send()` with a known block in a loop, run it under ZEsarUX with `--aofile`, and decode the dump with Task 1's decoder:
 
@@ -312,7 +327,7 @@ print(len(blocks), 'blocks'); print([frame.decode(b) for b in blocks])
 ```
 Expected: the known block decodes, repeatedly and identically.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add include/alink_phy.h src/alink_phy.c tools/bench/bench_alink_tx.c tools/bench.sh docs/perf/benchmarks.md
